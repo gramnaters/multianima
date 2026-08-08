@@ -23,17 +23,17 @@ def _search_tmdb(query, page=1):
         r = requests.get(f'{TMDB}/search/tv', params={'api_key': _tmdb_key(), 'query': query, 'page': page}, timeout=10)
         r.raise_for_status()
         data = r.json()
-        results = [{
-            'id': f"tt{item['id']}" if not item.get('imdb_id') else item.get('imdb_id', ''),
-            'tmdb_id': str(item.get('id', '')),
-            'type': 'series',
-            'name': item.get('name', '') or item.get('original_name', ''),
-            'poster': f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get('poster_path') else '',
-            'description': item.get('overview', '')[:200],
-            'year': (item.get('first_air_date', '') or '')[:4],
-            'genres': [g['name'] for g in item.get('genre_ids', []) or []],
-            'rating': str(item.get('vote_average', '')),
-        } for item in data.get('results', []) if item.get('media_type', 'tv') == 'tv' or not item.get('media_type')]
+        results = []
+        for item in data.get('results', []):
+            results.append({
+                'id': item.get('imdb_id') or f"tmdb:{item['id']}",
+                'tmdb_id': str(item.get('id', '')),
+                'type': 'series',
+                'name': (item.get('name', '') or item.get('original_name', '')),
+                'poster': f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get('poster_path') else '',
+                'description': (item.get('overview', '') or '')[:200],
+                'year': (item.get('first_air_date', '') or '')[:4],
+            })
         tmdb_cache[cache_key] = results
         return results
     except Exception as e:
@@ -48,15 +48,17 @@ def _trending(page=1):
         r = requests.get(f'{TMDB}/trending/tv/week', params={'api_key': _tmdb_key(), 'page': page}, timeout=10)
         r.raise_for_status()
         data = r.json()
-        results = [{
-            'id': f"tt{item['id']}" if not item.get('imdb_id') else item.get('imdb_id', ''),
-            'tmdb_id': str(item.get('id', '')),
-            'type': 'series', 'name': item.get('name', '') or item.get('original_name', ''),
-            'poster': f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get('poster_path') else '',
-            'description': (item.get('overview', '') or '')[:200],
-            'year': (item.get('first_air_date', '') or '')[:4],
-            'rating': str(item.get('vote_average', '')),
-        } for item in data.get('results', [])]
+        results = []
+        for item in data.get('results', []):
+            results.append({
+                'id': item.get('imdb_id') or f"tmdb:{item['id']}",
+                'tmdb_id': str(item.get('id', '')),
+                'type': 'series',
+                'name': (item.get('name', '') or item.get('original_name', '')),
+                'poster': f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get('poster_path') else '',
+                'description': (item.get('overview', '') or '')[:200],
+                'year': (item.get('first_air_date', '') or '')[:4],
+            })
         tmdb_cache[cache_key] = results
         return results
     except Exception as e:
