@@ -12,8 +12,8 @@ Players covered:
   ✅ StreamP2P (AES-CBC API)    ✅ RPMStream/UPNShare (AES-CBC API)
   ✅ StreamHG (AES-CBC API)     ✅ VidRocks (packed JS sources)
   ✅ Vidsrc.xyz/wtf (XOR+RC4)   ✅ TurboVid (sources block)
-  ✅ PirateXPlay (index11.php)  ⚠️ Abyss (needs Playwright)
-  ⚠️ FlixCloud (JWT + CF)
+  ✅ PirateXPlay (index11.php)  ✅ HSAStream (AES-CBC decrypt)
+  ⚠️ Abyss (needs Playwright)   ⚠️ FlixCloud (JWT + CF)
 """
 import re, json, base64, hashlib, secrets, os, requests, struct
 from urllib.parse import urlparse
@@ -51,6 +51,7 @@ PLAYER_MAP = {
     'vault-0': 'direct_m3u8', 'uwucdn': 'direct_m3u8',
     'cloud.desidubanime.me': 'cloud', '.upns': 'upnshare',
     'piratexplay.cc': 'piratexplay',
+    'hsastream.com': 'hsastream',
 }
 
 def classify_url(url: str) -> str:
@@ -738,6 +739,94 @@ def extract_piratexplay(url):
 
 
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+# HSASTREAM — AES-128-CBC decrypt API responses → m3u8 streams
+# ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+HSASTREAM_KEY = b'kiemtienmua911ca'
+
+def _hsastream_derive_iv(video_id):
+    """Derive 16-byte AES IV from video_id using hsastream's algorithm"""
+    o = "https:"
+    d = o + "//"
+    T = len(o) * len(d)
+    C = ""
+    for Z in range(1, 10):
+        C += chr(Z + T)
+    H = 3 * (ord(video_id[0]) if video_id else 0)
+    le = 111 + len(o)
+    L = le + 4
+    X = ord(o[1])
+    te = X - 2
+    C += chr(T) + chr(111) + chr(H) + chr(le) + chr(L) + chr(X) + chr(te)
+    return C.encode('utf-8')[:16]
+
+def _hsastream_decrypt(hex_data, video_id):
+    """AES-128-CBC decrypt hsastream API response, return full text"""
+    from Crypto.Cipher import AES
+    iv = _hsastream_derive_iv(video_id)
+    cleaned = re.sub(r'[^0-9a-fA-F]', '', hex_data)
+    cipher = AES.new(HSASTREAM_KEY, AES.MODE_CBC, iv)
+    decrypted = cipher.decrypt(bytes.fromhex(cleaned))
+    return decrypted.decode('utf-8', errors='ignore')
+
+def extract_hsastream(url):
+    """HSAStream - AES-128-CBC encrypted API → m3u8 streams"""
+    try:
+        # Extract video_id from URL (format: https://hsastream.com/#VIDEO_ID or /e/VIDEO_ID)
+        video_id = None
+        if '#' in url:
+            video_id = url.split('#')[-1].split('?')[0]
+        elif '/e/' in url:
+            video_id = url.split('/e/')[-1].split('?')[0].split('/')[0]
+        elif 'id=' in url:
+            from urllib.parse import parse_qs
+            parsed_q = urlparse(url)
+            video_id = parse_qs(parsed_q.query).get('id', [None])[0]
+        if not video_id:
+            return {'streams': []}
+
+        referer = url
+        parsed_url = urlparse(url)
+        if parsed_url.hostname:
+            referer = f'{parsed_url.scheme}://{parsed_url.hostname}/'
+
+        # Fetch encrypted video data
+        resp = requests.get(
+            f'https://hsastream.com/api/v1/video?id={video_id}&w=360&h=800&r={parsed_url.hostname or "animevilla.org"}',
+            headers={'User-Agent': UA, 'Referer': referer},
+            timeout=TIMEOUT
+        )
+        if resp.status_code != 200 or not resp.text.strip():
+            return {'streams': []}
+
+        # Decrypt - the response has escaped JSON with \/ for /
+        decrypted = _hsastream_decrypt(resp.text.strip(), video_id)
+        # Unescape JSON string escapes
+        decrypted_clean = decrypted.replace('\\/', '/')
+
+        streams = []
+        for key, name in [('source', 'Google'), ('cfNative', 'Cloudflare'), ('cf', 'CF')]:
+            match = re.search(rf'"{key}"\s*:\s*"(https?://[^"]+)"', decrypted_clean)
+            if match:
+                url = match.group(1)
+                if key == 'cf' and url.endswith('.txt'):
+                    continue
+                streams.append({'player': 'direct_m3u8', 'url': url, 'name': f'HSA/{name}'})
+
+        hls_match = re.search(r'"hlsVideoTiktok"\s*:\s*"([^"]+)"', decrypted_clean)
+        if hls_match:
+            url = hls_match.group(1)
+            if url.startswith('/'):
+                url = f'https://hsastream.com{url}'
+            if url.startswith('http'):
+                streams.append({'player': 'direct_m3u8', 'url': url, 'name': 'HSA/TikTok'})
+
+        return {'streams': streams}
+    except Exception as e:
+        print(f'[hsastream] error: {e}')
+        return {'streams': []}
+
+
+# ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 # REGISTRY
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 
@@ -764,6 +853,7 @@ EXTRACTORS = {
     'megacloud': extract_megacloud,
     'cloud': extract_cloud_desidub,
     'piratexplay': extract_piratexplay,
+    'hsastream': extract_hsastream,
 }
 
 PLAYER_NAMES = {
@@ -774,5 +864,5 @@ PLAYER_NAMES = {
     'zephyrflick': 'ZephyrFlick', 'moviesapi': 'MoviesAPI', 'videasy': 'Videasy',
     'playmogo': 'PlayMogo', 'abyss': 'Abyss Player', 'flixcloud': 'FlixCloud',
     'megacloud': 'MegaCloud', 'direct_m3u8': 'Direct Stream',
-    'piratexplay': 'PirateXPlay',
+    'piratexplay': 'PirateXPlay', 'hsastream': 'HSAStream',
 }

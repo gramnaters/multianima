@@ -5,6 +5,7 @@ from app.api.desidubanime import DesiDubAnimeAPI
 from app.api.animesalt import AnimeSaltAPI
 from app.api.animejoker import AnimeJokerAPI
 from app.api.bashapi import BashAPIProvider
+from app.api.animevilla import AnimeVillaProvider
 
 animelok = AnimeLokAPI()
 watchanimeworld = WatchAnimeWorldAPI()
@@ -12,6 +13,7 @@ desidubanime = DesiDubAnimeAPI()
 animesalt = AnimeSaltAPI()
 animejoker = AnimeJokerAPI()
 bashapi = BashAPIProvider()
+animevilla = AnimeVillaProvider()
 
 ALL_PROVIDERS = {
     'animelok': animelok,
@@ -20,4 +22,5 @@ ALL_PROVIDERS = {
     'animesalt': animesalt,
     'animejoker': animejoker,
     'bashapi': bashapi,
+    'animevilla': animevilla,
 }
