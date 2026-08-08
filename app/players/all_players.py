@@ -12,7 +12,8 @@ Players covered:
   ✅ StreamP2P (AES-CBC API)    ✅ RPMStream/UPNShare (AES-CBC API)
   ✅ StreamHG (AES-CBC API)     ✅ VidRocks (packed JS sources)
   ✅ Vidsrc.xyz/wtf (XOR+RC4)   ✅ TurboVid (sources block)
-  ⚠️ Abyss (needs Playwright)   ⚠️ FlixCloud (JWT + CF)
+  ✅ PirateXPlay (index11.php)  ⚠️ Abyss (needs Playwright)
+  ⚠️ FlixCloud (JWT + CF)
 """
 import re, json, base64, hashlib, secrets, os, requests, struct
 from urllib.parse import urlparse
@@ -49,6 +50,7 @@ PLAYER_MAP = {
     'af0': 'direct_m3u8', 'anvod': 'direct_m3u8',
     'vault-0': 'direct_m3u8', 'uwucdn': 'direct_m3u8',
     'cloud.desidubanime.me': 'cloud', '.upns': 'upnshare',
+    'piratexplay.cc': 'piratexplay',
 }
 
 def classify_url(url: str) -> str:
@@ -677,6 +679,64 @@ def extract_cloud_desidub(url):
     except: pass
     return {'streams': []}
 
+
+def extract_piratexplay(url):
+    """PirateXPlay - /public/player/index11.php?id={id} pattern"""
+    try:
+        parsed = urlparse(url)
+        vid_id = None
+        if 'id=' in url:
+            vid_id = parsed.query.split('id=')[-1].split('&')[0]
+        elif '/e/' in url:
+            vid_id = url.split('/e/')[-1].split('?')[0].split('#')[0]
+        if not vid_id:
+            return {'streams': []}
+
+        resp = requests.get(url, headers={'User-Agent': UA, 'Referer': url}, timeout=TIMEOUT)
+        html = resp.text
+
+        # Direct m3u8 in page
+        m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+        if m3u8:
+            return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'PirateX'}]}
+
+        # Sources block
+        src = re.search(r'sources:\s*\[(.*?)\]', html, re.DOTALL)
+        if src:
+            fm = re.search(r'file:\s*["\']([^"\']+)["\']', src.group(1))
+            if fm:
+                return {'streams': [{'player': 'direct_m3u8', 'url': fm.group(1), 'name': 'PirateX'}]}
+
+        # file: or src: patterns
+        for pattern in [r'file\s*[=:]\s*["\']([^"\']+)["\']', r'src\s*[=:]\s*["\']([^"\']+\.m3u8[^"\']*)["\']']:
+            match = re.search(pattern, html)
+            if match and 'http' in match.group(1):
+                return {'streams': [{'player': 'direct_m3u8', 'url': match.group(1), 'name': 'PirateX'}]}
+
+        # Try /public/player/ API with id
+        base = f'{parsed.scheme}://{parsed.hostname}'
+        api_url = f'{base}/public/player/index11.php?id={vid_id}'
+        if api_url != url:
+            r2 = requests.get(api_url, headers={'User-Agent': UA, 'Referer': url}, timeout=TIMEOUT)
+            m3u8_2 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', r2.text)
+            if m3u8_2:
+                return {'streams': [{'player': 'direct_m3u8', 'url': m3u8_2.group(1), 'name': 'PirateX'}]}
+
+        # Iframe redirect
+        iframe = re.search(r'iframe[^>]*src=["\']([^"\']+)["\']', html)
+        if iframe:
+            sub_player = classify_url(iframe.group(1))
+            sub_ex = EXTRACTORS.get(sub_player)
+            if sub_ex and sub_ex != extract_piratexplay:
+                try:
+                    return sub_ex(iframe.group(1))
+                except:
+                    pass
+    except Exception as e:
+        print(f'[piratexplay] error: {e}')
+    return {'streams': []}
+
+
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 # REGISTRY
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
@@ -703,6 +763,7 @@ EXTRACTORS = {
     'flixcloud': extract_flixcloud,
     'megacloud': extract_megacloud,
     'cloud': extract_cloud_desidub,
+    'piratexplay': extract_piratexplay,
 }
 
 PLAYER_NAMES = {
@@ -713,4 +774,5 @@ PLAYER_NAMES = {
     'zephyrflick': 'ZephyrFlick', 'moviesapi': 'MoviesAPI', 'videasy': 'Videasy',
     'playmogo': 'PlayMogo', 'abyss': 'Abyss Player', 'flixcloud': 'FlixCloud',
     'megacloud': 'MegaCloud', 'direct_m3u8': 'Direct Stream',
+    'piratexplay': 'PirateXPlay',
 }
