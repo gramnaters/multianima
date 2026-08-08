@@ -1,11 +1,71 @@
 from urllib.parse import unquote
+import requests
 from flask import Blueprint
-from app.api import ALL_PROVIDERS
+from cachetools import TTLCache
 from app.routes.utils import respond_with, log_error
-from app.mapper import map_imdb_to_all_slugs, parse_custom_id
-from app.config_parser import parse_config
 
 meta_bp = Blueprint('meta', __name__)
+TMDB = 'https://api.themoviedb.org/3'
+meta_cache = TTLCache(maxsize=500, ttl=86400)
+
+
+def _tmdb_key():
+    from config import Config
+    return Config.TMDB_API_KEY or ''
+
+
+def _get_tmdb_details(tmdb_id, content_type='tv'):
+    cache_key = f'detail:{tmdb_id}'
+    if cache_key in meta_cache: return meta_cache[cache_key]
+    try:
+        r = requests.get(f'{TMDB}/{content_type}/{tmdb_id}', params={
+            'api_key': _tmdb_key(),
+            'append_to_response': 'external_ids,seasons',
+        }, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        imdb_id = (data.get('external_ids') or {}).get('imdb_id', '')
+        result = {
+            'id': imdb_id or f"hd:tmdb:{tmdb_id}",
+            'tmdb_id': str(tmdb_id),
+            'type': 'series',
+            'name': data.get('name', '') or data.get('title', ''),
+            'poster': f"https://image.tmdb.org/t/p/w500{data['poster_path']}" if data.get('poster_path') else '',
+            'description': (data.get('overview', '') or '')[:300],
+            'genres': [g['name'] for g in data.get('genres', [])],
+            'year': (data.get('first_air_date', '') or '')[:4],
+            'rating': str(data.get('vote_average', '')),
+            'seasons': [],
+        }
+        for s in data.get('seasons', []):
+            if s.get('season_number', 0) > 0:
+                result['seasons'].append({
+                    'season': s['season_number'],
+                    'episode_count': s.get('episode_count', 0),
+                    'name': s.get('name', ''),
+                })
+        meta_cache[cache_key] = result
+        return result
+    except Exception as e:
+        print(f'[tmdb] detail error: {e}')
+        return None
+
+
+def _get_season_episodes(tmdb_id, season_num):
+    cache_key = f'season:{tmdb_id}:{season_num}'
+    if cache_key in meta_cache: return meta_cache[cache_key]
+    try:
+        r = requests.get(f'{TMDB}/tv/{tmdb_id}/season/{season_num}', params={'api_key': _tmdb_key()}, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        eps = [{'season': season_num, 'episode': ep['episode_number'],
+                 'title': ep.get('name', f'E{ep["episode_number"]}'),
+                 'overview': (ep.get('overview', '') or '')[:100]}
+                for ep in data.get('episodes', [])]
+        meta_cache[cache_key] = eps
+        return eps
+    except: return []
+
 
 @meta_bp.route('/meta/<meta_type>/<meta_id>.json')
 @meta_bp.route('/<lang>/meta/<meta_type>/<meta_id>.json')
@@ -14,45 +74,55 @@ meta_bp = Blueprint('meta', __name__)
 def addon_meta(meta_type, meta_id, lang=None, config_data=None):
     meta_id = unquote(meta_id)
 
-    targets = []
-    if meta_id.startswith('tt'):
-        all_matches = map_imdb_to_all_slugs(meta_id)
-        for slug, pname in all_matches:
-            targets.append((pname, slug))
-    elif meta_id.startswith('hd:'):
-        result = parse_custom_id(meta_id)
-        if result:
-            targets.append(result)
+    tmdb_id = None
+    if meta_id.startswith('hd:tmdb:'):
+        tmdb_id = meta_id.replace('hd:tmdb:', '')
+    elif meta_id.startswith('tt'):
+        # Look up TMDB ID from IMDB
+        try:
+            r = requests.get(f'{TMDB}/find/{meta_id}', params={
+                'api_key': _tmdb_key(), 'external_source': 'imdb_id'
+            }, timeout=10)
+            data = r.json()
+            results = data.get('tv_results', []) or data.get('movie_results', [])
+            if results:
+                tmdb_id = str(results[0]['id'])
+        except: pass
 
-    if not targets:
+    if not tmdb_id:
         return respond_with({'meta': {}})
 
-    # Try all providers, prefer first successful
-    for provider_name, slug in targets:
-        provider = ALL_PROVIDERS.get(provider_name)
-        if not provider: continue
+    details = _get_tmdb_details(tmdb_id)
+    if not details:
+        return respond_with({'meta': {}})
 
-        try:
-            details = provider.get_anime_details(slug)
-            if not details: continue
+    meta = {
+        'id': meta_id, 'type': 'series',
+        'name': details['name'],
+        'poster': details.get('poster', ''),
+        'description': details.get('description', ''),
+        'genres': details.get('genres', []),
+        'releaseInfo': details.get('year', ''),
+    }
 
-            meta = {
-                'id': meta_id, 'type': meta_type,
-                'name': details.get('title', ''),
-                'description': details.get('description', ''),
-                'poster': details.get('poster', ''),
-                'genres': details.get('genres', []),
-                'releaseInfo': details.get('year', ''), 'runtime': details.get('runtime', ''),
-            }
-            if details.get('type') == 'series':
-                meta['videos'] = [{
-                    'id': f"{meta_id}:{ep.get('season',1)}:{ep.get('episode',1)}",
-                    'title': ep.get('title', f"Episode {ep.get('episode',1)}"),
-                    'episode': ep.get('episode', 1), 'season': ep.get('season', 1),
-                } for ep in details.get('episodes', [])]
+    # Build video list from seasons
+    videos = []
+    for s in details.get('seasons', [])[:5]:
+        episodes = _get_season_episodes(tmdb_id, s['season'])
+        for ep in episodes:
+            videos.append({
+                'id': f"{meta_id}:{ep['season']}:{ep['episode']}",
+                'title': ep['title'],
+                'season': ep['season'], 'episode': ep['episode'],
+            })
 
-            return respond_with({'meta': meta}, 86400)
-        except Exception as e:
-            log_error(e)
+    if not videos:
+        for i in range(1, 13):
+            videos.append({
+                'id': f"{meta_id}:1:{i}",
+                'title': f'Episode {i}',
+                'season': 1, 'episode': i,
+            })
 
-    return respond_with({'meta': {}})
+    meta['videos'] = videos
+    return respond_with({'meta': meta}, 86400)
