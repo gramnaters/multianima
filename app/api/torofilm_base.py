@@ -117,6 +117,7 @@ class TorofilmAPI:
                         data_nume = li.get('data-nume', str(i + 1))
                         data_type = li.get('data-type', 'tv')
                         ep_link = li.find('a')
+                        ep_href = ep_link.get('href', '') if ep_link else ''
                         ep_title = ep_link.text.strip() if ep_link else f'Episode {i+1}'
 
                         match = re.match(r'(\d+)x(\d+)', ep_title)
@@ -127,21 +128,26 @@ class TorofilmAPI:
                             season = 1
                             ep_num = i + 1
 
+                        ep_page_url = ep_href if ep_href.startswith('http') else urljoin(url, ep_href) if ep_href else ''
+
                         episodes.append({
                             'season': season, 'episode': ep_num,
                             'title': ep_title,
                             'data_post': data_post, 'data_nume': data_nume,
-                            'data_type': data_type, 'url': url,
-                            'slug': slug,
+                            'data_type': data_type, 'url': url, 'slug': slug,
+                            'ep_page_url': ep_page_url,
                         })
 
                     if not episodes:
                         for i in range(1, 13):
+                            ep_slug = f'{slug}-{i}'
+                            ep_page_url = f'{self.BASE_URL}/episode/{ep_slug}/'
                             episodes.append({
                                 'season': 1, 'episode': i,
                                 'title': f'Episode {i}',
                                 'data_post': slug, 'data_nume': str(i),
                                 'data_type': 'tv', 'url': url, 'slug': slug,
+                                'ep_page_url': ep_page_url,
                             })
                 else:
                     episodes.append({
@@ -220,11 +226,13 @@ class TorofilmAPI:
             except Exception as e:
                 print(f'[{self.NAME}] AJAX error: {e}')
 
-        # Also try to find iframes directly
+        # Also try to find iframes directly from episode page
         if not streams:
             try:
-                ep_url = ep_data.get('url', f'{self.BASE_URL}/series/{slug}')
-                resp = self._get(ep_url)
+                ep_page_url = ep_data.get('ep_page_url', '')
+                if not ep_page_url:
+                    ep_page_url = ep_data.get('url', f'{self.BASE_URL}/series/{slug}')
+                resp = self._get(ep_page_url)
                 soup = BeautifulSoup(resp.text, 'html.parser')
                 for iframe in soup.find_all('iframe'):
                     src = iframe.get('src') or iframe.get('data-src', '')

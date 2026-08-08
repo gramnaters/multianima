@@ -25,9 +25,10 @@ def _search_tmdb(query, page=1):
         data = r.json()
         results = []
         for item in data.get('results', []):
+            tmdb_id = str(item.get('id', ''))
             results.append({
-                'id': item.get('imdb_id') or f"tmdb:{item['id']}",
-                'tmdb_id': str(item.get('id', '')),
+                'id': f'hd:tmdb:{tmdb_id}',
+                'tmdb_id': tmdb_id,
                 'type': 'series',
                 'name': (item.get('name', '') or item.get('original_name', '')),
                 'poster': f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get('poster_path') else '',
@@ -50,9 +51,10 @@ def _trending(page=1):
         data = r.json()
         results = []
         for item in data.get('results', []):
+            tmdb_id = str(item.get('id', ''))
             results.append({
-                'id': item.get('imdb_id') or f"tmdb:{item['id']}",
-                'tmdb_id': str(item.get('id', '')),
+                'id': f'hd:tmdb:{tmdb_id}',
+                'tmdb_id': tmdb_id,
                 'type': 'series',
                 'name': (item.get('name', '') or item.get('original_name', '')),
                 'poster': f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get('poster_path') else '',
@@ -71,22 +73,25 @@ def _discover_anime(page=1):
     cache_key = f'anime:{page}'
     if cache_key in tmdb_cache: return tmdb_cache[cache_key]
     try:
-        # TMDB keyword ID 210024 = "anime"
         r = requests.get(f'{TMDB}/discover/tv', params={
             'api_key': _tmdb_key(), 'with_keywords': '210024',
             'sort_by': 'popularity.desc', 'page': page,
         }, timeout=10)
         r.raise_for_status()
         data = r.json()
-        results = [{
-            'id': f"tt{item['id']}" if not item.get('imdb_id') else item.get('imdb_id', ''),
-            'tmdb_id': str(item.get('id', '')),
-            'type': 'series', 'name': item.get('name', '') or item.get('original_name', ''),
-            'poster': f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get('poster_path') else '',
-            'description': (item.get('overview', '') or '')[:200],
-            'year': (item.get('first_air_date', '') or '')[:4],
-            'rating': str(item.get('vote_average', '')),
-        } for item in data.get('results', [])]
+        results = []
+        for item in data.get('results', []):
+            tmdb_id = str(item.get('id', ''))
+            results.append({
+                'id': f'hd:tmdb:{tmdb_id}',
+                'tmdb_id': tmdb_id,
+                'type': 'series',
+                'name': item.get('name', '') or item.get('original_name', ''),
+                'poster': f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get('poster_path') else '',
+                'description': (item.get('overview', '') or '')[:200],
+                'year': (item.get('first_air_date', '') or '')[:4],
+                'rating': str(item.get('vote_average', '')),
+            })
         tmdb_cache[cache_key] = results
         return results
     except Exception as e:
@@ -111,15 +116,14 @@ def addon_catalog(catalog_type, catalog_id, search=None, lang=None, config_data=
             search = urllib.parse.unquote(search)
             results = _search_tmdb(search)
         elif catalog_id == 'hd_latest':
-            results = _trending()
+            results = _discover_anime(1)
         else:
-            results = _discover_anime()
+            results = _discover_anime(2)
 
         metas = []
         for item in results:
             meta_id = item.get('id', '')
-            if not meta_id or not meta_id.startswith('tt'):
-                meta_id = f"hd:tmdb:{item.get('tmdb_id', item.get('name',''))}"
+            if not meta_id: continue
 
             metas.append({
                 'id': meta_id,

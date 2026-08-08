@@ -38,6 +38,7 @@ PLAYER_MAP = {
     'player.abyssplayer.com': 'abyss', 'play.abyssplayer.com': 'abyss',
     'flixcloud.cc': 'flixcloud',
     'play.zephyrix.top': 'zephyrflick', 'play.zephyrflick.top': 'zephyrflick',
+    'as-cdn21.top': 'zephyrflick', 'as-cdn22.top': 'zephyrflick', 'as-cdn23.top': 'zephyrflick',
     'vidsrc.xyz': 'vidsrc', 'vidsrc.wtf': 'vidsrc', 'vidsrc.me': 'vidsrc',
     'moviesapi.club': 'moviesapi',
     'player.videasy.net': 'videasy',
