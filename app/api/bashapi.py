@@ -33,35 +33,44 @@ class BashAPIProvider:
     def search_anime(self, query: str) -> list:
         results = []
         try:
-            resp = self._get(f'{BASE_URL}/home')
+            if query.strip():
+                resp = self._get(f'{BASE_URL}/search/{quote(query, safe="")}')
+            else:
+                resp = self._get(f'{BASE_URL}/home')
             data = resp.json()
             if not data.get('success'):
                 return []
 
             seen = set()
-            for section in data.get('data', {}).get('main', []):
-                for item in section.get('data', []):
-                    title = item.get('title', '').strip()
-                    if not title or len(title) < 2:
-                        continue
-                    if query.lower() not in title.lower():
-                        continue
+            search_data = data.get('data', {})
+            items = search_data.get('data', []) if isinstance(search_data, dict) else []
+            if not items:
+                for section in search_data.get('main', []) if isinstance(search_data, dict) else []:
+                    items.extend(section.get('data', []))
 
-                    slug = item.get('slug', '')
-                    series_slug = re.sub(r'-\d+x\d+$', '', slug)
-                    if series_slug in seen:
-                        continue
-                    seen.add(series_slug)
+            for item in items:
+                title = item.get('title', '').strip()
+                if not title or len(title) < 2:
+                    continue
+                if query.strip() and query.lower() not in title.lower():
+                    continue
 
-                    content_type = item.get('type', 'series')
-                    results.append({
-                        'title': title,
-                        'slug': series_slug,
-                        'poster': item.get('poster', ''),
-                        'type': content_type,
-                        'provider': 'bashapi',
-                        'tmdb_rating': item.get('tmdbRating'),
-                    })
+                slug = item.get('slug', '')
+                url = item.get('url', '')
+                series_slug = re.sub(r'-\d+x\d+$', '', slug)
+                if series_slug in seen:
+                    continue
+                seen.add(series_slug)
+
+                content_type = 'movie' if '/movies/' in url else item.get('type', 'series')
+                results.append({
+                    'title': title,
+                    'slug': series_slug,
+                    'poster': item.get('poster', ''),
+                    'type': content_type,
+                    'provider': 'bashapi',
+                    'tmdb_rating': item.get('tmdbRating'),
+                })
 
         except Exception as e:
             print(f'[bashapi] search error: {e}')
