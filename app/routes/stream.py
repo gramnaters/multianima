@@ -125,12 +125,23 @@ def addon_stream(content_type, content_id, lang=None, config_data=None):
         key = s.get('url', '')
         if not key or key in seen: continue
         seen.add(key)
-        final.append({
+        stream_obj = {
             'title': s.get('title', 'Stream'),
             'name': s.get('name', 'Stream'),
             'url': s['url'],
-            'behaviorHints': s.get('behaviorHints', {'notWebReady': True}),
-        })
+            'behaviorHints': {
+                'notWebReady': False,
+                'bingeGroup': s.get('name', 'multianima'),
+                'proxyHeaders': {
+                    'request': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    }
+                }
+            },
+        }
+        if s.get('subtitles'):
+            stream_obj['subtitles'] = s['subtitles']
+        final.append(stream_obj)
 
     print(f'[stream] {content_id} => {len(final)} streams')
     return respond_with({'streams': final})
