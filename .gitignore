@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.db
+.env
+*.sqlite
+node_modules/
+*.log
+*.har
+*.zip*
+all_working_*
+indian_proxies.txt
+all traffic*
+server.err
+abyss_extractor.py
+vidmoly_extractor.py

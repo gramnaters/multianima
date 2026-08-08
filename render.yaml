@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: hindi-dub-anime-hub
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -c gunicorn_config.py run:app
+    healthCheckPath: /manifest.json
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: TMDB_API_KEY
+        sync: false
+      - key: STREAM_MODE
+        value: direct
+      - key: DB_TYPE
+        value: sqlite
+      - key: DB_PATH
+        value: /tmp/mappings.db

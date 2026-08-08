@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multianima - Configure</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh}
+.container{max-width:900px;margin:0 auto;padding:20px}
+h1{color:#e94560;margin-bottom:5px}
+.sub{color:#888;margin-bottom:25px;font-size:14px}
+.card{background:#1a1a2e;border-radius:12px;padding:20px;margin-bottom:20px;border:1px solid #2a2a4a}
+.card h2{font-size:16px;margin-bottom:15px;color:#fff}
+.grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(150px,1fr));gap:10px}
+.provider-btn{padding:10px 12px;border-radius:8px;border:1px solid #3a3a5a;background:#16213e;color:#ccc;cursor:pointer;text-align:center;font-size:13px;transition:all .2s;user-select:none}
+.provider-btn.active{background:#1a3a5e;border-color:#e94560;color:#fff;box-shadow:0 0 8px rgba(233,69,96,.3)}
+.provider-btn:hover{border-color:#e94560}
+.provider-btn .name{font-weight:600;display:block;margin-bottom:3px}
+.provider-btn .meta{font-size:11px;color:#888}
+.pill-row{display:flex;flex-wrap:wrap;gap:8px}
+.pill{padding:8px 16px;border-radius:20px;border:1px solid #3a3a5a;background:#16213e;color:#ccc;cursor:pointer;font-size:13px;transition:all .2s;user-select:none}
+.pill.active{background:#e94560;border-color:#e94560;color:#fff}
+.pill:hover{border-color:#e94560}
+.lang-grid{display:flex;flex-wrap:wrap;gap:10px}
+.lang-btn{padding:10px 20px;border-radius:8px;border:1px solid #3a3a5a;background:#16213e;color:#ccc;cursor:pointer;font-size:14px;transition:all .2s;user-select:none}
+.lang-btn.active{border-color:#4ecdc4;background:#1a3a3e;color:#4ecdc4}
+.lang-btn:hover{border-color:#4ecdc4}
+.summary{position:sticky;bottom:0;background:#1a1a2e;border-top:2px solid #e94560;padding:15px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.install-btn{padding:14px 32px;background:#e94560;color:#fff;border:none;border-radius:10px;font-size:18px;font-weight:700;cursor:pointer;transition:all .2s}
+.install-btn:hover{background:#d63851;transform:scale(1.02)}
+.fallback{display:none;margin-top:10px;padding:10px;background:#16213e;border-radius:8px}
+.fallback code{word-break:break-all;font-size:12px;color:#aaa}
+.copy-btn{padding:6px 14px;background:#3a3a5a;color:#fff;border:none;border-radius:6px;cursor:pointer;margin-left:10px;font-size:12px}
+#install-status{margin-left:8px;color:#4ecdc4;font-size:13px;display:none}
+select{background:#16213e;color:#fff;border:1px solid #3a3a5a;padding:8px 12px;border-radius:8px;font-size:14px}
+input[type=number]{background:#16213e;color:#fff;border:1px solid #3a3a5a;padding:8px;border-radius:8px;width:80px;font-size:14px}
+.toggle-row{display:flex;align-items:center;gap:20px}
+.toggle-label{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px}
+.toggle-label input{display:none}
+.toggle{width:44px;height:24px;background:#3a3a5a;border-radius:12px;position:relative;transition:all .2s}
+.toggle::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:all .2s}
+input:checked+.toggle{background:#e94560}
+input:checked+.toggle::after{left:22px}
+@media(max-width:600px){.grid{grid-template-columns:repeat(2,1fr)}.summary{flex-direction:column;text-align:center}}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Hindi Dub Anime Hub</h1>
+<p class="sub">Configure streaming sources, quality, and language preferences</p>
+
+<!-- Providers -->
+<div class="card">
+<h2>Streaming Providers</h2>
+<p style="font-size:12px;color:#888;margin-bottom:12px">Select which sites to fetch streams from</p>
+<div class="grid" id="provider-grid">
+</div>
+</div>
+
+<!-- Players -->
+<div class="card">
+<h2>Direct Player Extractors</h2>
+<p style="font-size:12px;color:#888;margin-bottom:12px">These extract video URLs directly from embed players. Disable any that block your region.</p>
+<div class="grid" id="player-grid">
+</div>
+</div>
+
+<!-- Quality -->
+<div class="card">
+<h2>Quality</h2>
+<div class="pill-row" id="quality-row">
+</div>
+</div>
+
+<!-- Language -->
+<div class="card">
+<h2>Language Preference</h2>
+<p style="font-size:12px;color:#888;margin-bottom:12px">Show streams in these languages. Hindi dub is default.</p>
+<div class="lang-grid" id="lang-grid">
+</div>
+</div>
+
+<!-- Advanced -->
+<div class="card">
+<h2>Advanced</h2>
+<div class="toggle-row">
+<label class="toggle-label">
+<input type="checkbox" id="subs-toggle" checked>
+<span class="toggle"></span>
+<span>Enable subtitles</span>
+</label>
+<label class="toggle-label">
+<input type="checkbox" id="proxy-toggle">
+<span class="toggle"></span>
+<span>Proxy mode (for web players)</span>
+</label>
+</div>
+<div style="margin-top:15px">
+<label style="font-size:14px;color:#888;margin-right:10px">Max timeout:</label>
+<select id="timeout-select">
+<option value="5">5s</option>
+<option value="10">10s</option>
+<option value="15" selected>15s</option>
+<option value="30">30s</option>
+<option value="45">45s</option>
+</select>
+<label style="font-size:14px;color:#888;margin-left:15px;margin-right:10px">Max streams per ep:</label>
+<input type="number" id="max-streams" value="15" min="5" max="50">
+</div>
+</div>
+</div>
+
+<!-- Sticky Install Bar -->
+<div class="summary">
+<div>
+<strong style="font-size:15px">Hindi Dub Anime Hub</strong>
+<span id="install-status">Installing...</span>
+</div>
+<button class="install-btn" onclick="install()">Install in Stremio</button>
+<div class="fallback" id="fallback">
+<p>If Stremio doesn't open:</p>
+<code id="copy-url"></code>
+<button class="copy-btn" onclick="copyUrl()">Copy</button>
+</div>
+</div>
+
+<script>
+const PROVIDERS = [
+{key:'animelok', name:'AnimeLok', langs:'Hindi+Tamil+Telugu+Eng+Jap', type:'REST API'},
+{key:'watchanimeworld', name:'AnimeWorld India', langs:'Hindi+Tamil+Telugu+Eng', type:'WordPress'},
+{key:'animesalt', name:'Anime Salt', langs:'Hindi+Tamil+Eng', type:'WordPress'},
+{key:'animejoker', name:'Anime Joker', langs:'Hindi+Multi', type:'WordPress'},
+{key:'desidubanime', name:'DesiDubAnime', langs:'Hindi Dub', type:'WordPress'},
+];
+const PLAYERS = [
+{key:'gdmirrorbot', name:'GD MirrorBot', note:'Multi-host aggregator'},
+{key:'vidmoly', name:'VidMoly', note:'Direct m3u8 extract'},
+{key:'streamruby', name:'StreamRuby', note:'POST /dl extract'},
+{key:'doodstream', name:'DoodStream', note:'pass_md5 extract'},
+{key:'streamtape', name:'StreamTape', note:'Token-based'},
+{key:'turbovid', name:'TurboVid', note:'Sources block'},
+{key:'vidsrc', name:'VidSrc', note:'XOR+RC4 decrypt'},
+{key:'zephyrflick', name:'ZephyrFlick', note:'POST /player API'},
+{key:'streamp2p', name:'StreamP2P', note:'AES-CBC API'},
+{key:'rpmstream', name:'RPMShare', note:'AES-CBC API'},
+{key:'upnshare', name:'UPNShare', note:'AES-CBC API'},
+{key:'streamhg', name:'StreamHG', note:'AES-CBC API'},
+{key:'vidrocks', name:'VidRocks', note:'Packed JS'},
+{key:'moviesapi', name:'MoviesAPI', note:'JSON API'},
+{key:'videasy', name:'Videasy', note:'Next.js embed'},
+{key:'playmogo', name:'PlayMogo', note:'File host'},
+{key:'abyss', name:'Abyss Player', note:'Embed (needs JS)'},
+{key:'flixcloud', name:'FlixCloud', note:'Embed (JWT+CF)'},
+];
+const QUALITIES = [
+{key:'res_2160', label:'4K'},{key:'res_1080', label:'1080p'},
+{key:'res_720', label:'720p'},{key:'res_480', label:'480p'},{key:'res_360', label:'360p'},
+];
+const LANGS = [
+{key:'lang_hindi', label:'Hindi'},{key:'lang_tamil', label:'Tamil'},
+{key:'lang_telugu', label:'Telugu'},{key:'lang_malayalam', label:'Malayalam'},
+{key:'lang_kannada', label:'Kannada'},{key:'lang_english', label:'English'},
+{key:'lang_japanese', label:'Japanese'},
+];
+
+function renderButtons(cls, containerId, items, activePrefix) {
+const el = document.getElementById(containerId);
+items.forEach(item=>{
+const btn = document.createElement('div');
+btn.className = cls + (item.key!=='abyss'&&item.key!=='flixcloud'?' active':'');
+btn.id = activePrefix + item.key;
+btn.innerHTML = cls==='provider-btn' ? `<span class=name>${item.name}</span><span class=meta>${item.langs||item.note}</span>` : `<span class=name>${item.name}</span><span class=meta>${item.note||''}</span>`;
+btn.onclick = () => { btn.classList.toggle('active'); updateUrl(); };
+el.appendChild(btn);
+});
+}
+function renderPills(containerId, items, prefix) {
+const el = document.getElementById(containerId);
+items.forEach(item=>{
+const btn = document.createElement('div');
+btn.className = 'pill active';
+btn.id = prefix + item.key;
+btn.textContent = item.label;
+btn.onclick = () => { btn.classList.toggle('active'); updateUrl(); };
+el.appendChild(btn);
+});
+}
+
+renderButtons('provider-btn', 'provider-grid', PROVIDERS, 'src_');
+renderButtons('provider-btn', 'player-grid', PLAYERS, 'plr_');
+renderPills('quality-row', QUALITIES, 'q_');
+renderPills('lang-grid', LANGS, 'l_');
+
+function buildConfig() {
+const config = {};
+document.querySelectorAll('#provider-grid .active').forEach(el => config['src_'+el.id.replace('src_','')] = 'on');
+document.querySelectorAll('#player-grid .active').forEach(el => config['plr_'+el.id.replace('plr_','')] = 'on');
+document.querySelectorAll('#quality-row .active').forEach(el => config['q_'+el.id.replace('q_','')] = 'on');
+document.querySelectorAll('#lang-grid .active').forEach(el => config['l_'+el.id.replace('l_','')] = 'on');
+config.subs = document.getElementById('subs-toggle').checked ? 'on' : 'off';
+config.proxy = document.getElementById('proxy-toggle').checked ? 'on' : 'off';
+config.timeout = document.getElementById('timeout-select').value;
+config.max = document.getElementById('max-streams').value;
+return config;
+}
+
+const addonHost = window.location.origin;
+
+function updateUrl() {
+const config = buildConfig();
+const json = JSON.stringify(config);
+const encoded = btoa(unescape(encodeURIComponent(json))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+const url = `${addonHost}/${encoded}/manifest.json`;
+document.getElementById('copy-url').textContent = url;
+}
+
+function install() {
+const config = buildConfig();
+const json = JSON.stringify(config);
+const encoded = btoa(unescape(encodeURIComponent(json))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+const url = `${addonHost}/${encoded}/manifest.json`;
+document.getElementById('install-status').style.display = 'inline';
+document.getElementById('fallback').style.display = 'block';
+document.getElementById('copy-url').textContent = url;
+setTimeout(()=>{ window.location.href = `stremio://${url.replace('https://','').replace('http://','')}`; }, 500);
+}
+
+function copyUrl() {
+navigator.clipboard.writeText(document.getElementById('copy-url').textContent);
+}
+updateUrl();
+</script>
+</body>
+</html>
