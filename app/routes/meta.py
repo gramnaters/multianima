@@ -75,7 +75,9 @@ def addon_meta(meta_type, meta_id, lang=None, config_data=None):
     meta_id = unquote(meta_id)
 
     tmdb_id = None
-    if meta_id.startswith('hd:tmdb:'):
+    if meta_id.startswith('tmdb:'):
+        tmdb_id = meta_id.replace('tmdb:', '')
+    elif meta_id.startswith('hd:tmdb:'):
         tmdb_id = meta_id.replace('hd:tmdb:', '')
     elif meta_id.startswith('tt'):
         # Look up TMDB ID from IMDB
