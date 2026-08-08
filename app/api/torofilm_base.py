@@ -29,15 +29,17 @@ class TorofilmAPI:
 
     def _get(self, url, **kwargs):
         self.session.headers['User-Agent'] = random.choice(_USER_AGENTS)
+        kwargs.setdefault('timeout', TIMEOUT)
         if self.SCRAPER_PROXY:
-            return self.session.get(self._proxy_url(url), timeout=TIMEOUT, **kwargs)
-        return self._get(url, timeout=TIMEOUT, **kwargs)
+            return self.session.get(self._proxy_url(url), **kwargs)
+        return self.session.get(url, **kwargs)
 
     def _post(self, url, **kwargs):
         self.session.headers['User-Agent'] = random.choice(_USER_AGENTS)
+        kwargs.setdefault('timeout', TIMEOUT)
         if self.SCRAPER_PROXY:
-            return self.session.post(self._proxy_url(url), timeout=TIMEOUT, **kwargs)
-        return self._post(url, timeout=TIMEOUT, **kwargs)
+            return self.session.post(self._proxy_url(url), **kwargs)
+        return self.session.post(url, **kwargs)
 
     def _proxy_url(self, target_url):
         pw = os.getenv('SCRAPER_PROXY_PASSWORD', '')

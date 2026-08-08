@@ -28,7 +28,8 @@ class AnimeLokAPI:
 
     def _get(self, url, **kwargs):
         target = _proxy_url(url) if SCRAPER_PROXY else url
-        return self.session.get(target, timeout=TIMEOUT, **kwargs)
+        kwargs.setdefault('timeout', TIMEOUT)
+        return self.session.get(target, **kwargs)
 
     def _proxy_url(self, target):
         return f"{SCRAPER_PROXY}/proxy/stream?d={quote(target,safe='')}&api_password={SCRAPER_PROXY_PW}&h_user-agent={quote(UA,safe='')}"
