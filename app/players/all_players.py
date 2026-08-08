@@ -129,8 +129,12 @@ def extract_gdmirrorbot(url):
         return {'streams': []}
 
     sources = data.get('sources', {})
-    mresult = json.loads(base64.b64decode(data['mresult']))
+    mresult_raw = data.get('mresult', '{}')
+    mresult = json.loads(base64.b64decode(mresult_raw)) if isinstance(mresult_raw, str) else {}
     streams = []
+
+    if isinstance(sources, list):
+        sources = {s.get('key', str(i)): s for i, s in enumerate(sources) if isinstance(s, dict)}
 
     for key, cfg in sources.items():
         skey = mresult.get(key)
