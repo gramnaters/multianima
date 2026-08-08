@@ -1,9 +1,7 @@
 # Generic WordPress torofilm theme API (used by watchanimeworld, animesalt, animejoker)
-import requests
-import re
-import random
+import requests, re, random, os
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 from cachetools import TTLCache, cached
 
 _USER_AGENTS = [
@@ -17,9 +15,9 @@ details_cache = TTLCache(maxsize=1024, ttl=3600)
 streams_cache = TTLCache(maxsize=512, ttl=600)
 
 class TorofilmAPI:
-    """Base class for torofilm WordPress anime sites"""
     BASE_URL = ''
     NAME = ''
+    SCRAPER_PROXY = os.getenv('SCRAPER_PROXY_URL', '')
 
     def __init__(self):
         self.session = requests.Session()
@@ -31,11 +29,20 @@ class TorofilmAPI:
 
     def _get(self, url, **kwargs):
         self.session.headers['User-Agent'] = random.choice(_USER_AGENTS)
-        return self.session.get(url, timeout=TIMEOUT, **kwargs)
+        if self.SCRAPER_PROXY:
+            return self.session.get(self._proxy_url(url), timeout=TIMEOUT, **kwargs)
+        return self._get(url, timeout=TIMEOUT, **kwargs)
 
     def _post(self, url, **kwargs):
         self.session.headers['User-Agent'] = random.choice(_USER_AGENTS)
-        return self.session.post(url, timeout=TIMEOUT, **kwargs)
+        if self.SCRAPER_PROXY:
+            return self.session.post(self._proxy_url(url), timeout=TIMEOUT, **kwargs)
+        return self._post(url, timeout=TIMEOUT, **kwargs)
+
+    def _proxy_url(self, target_url):
+        pw = os.getenv('SCRAPER_PROXY_PASSWORD', '')
+        ua = self.session.headers.get('User-Agent', '')
+        return f"{self.SCRAPER_PROXY}/proxy/stream?d={quote(target_url,safe='')}&api_password={pw}&h_user-agent={quote(ua,safe='')}"
 
     @cached(search_cache)
     def search_anime(self, query: str) -> list:

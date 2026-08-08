@@ -1,12 +1,17 @@
-import requests
-import re
-import json
+import requests, re, json, os
 from bs4 import BeautifulSoup
+from urllib.parse import quote
 from cachetools import TTLCache, cached
 
 BASE_URL = 'https://animelok.live'
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 TIMEOUT = 15
+
+SCRAPER_PROXY = os.getenv('SCRAPER_PROXY_URL', '')
+SCRAPER_PROXY_PW = os.getenv('SCRAPER_PROXY_PASSWORD', '')
+
+def _proxy_url(target):
+    return f"{SCRAPER_PROXY}/proxy/stream?d={quote(target,safe='')}&api_password={SCRAPER_PROXY_PW}&h_user-agent={quote(UA,safe='')}"
 
 search_cache = TTLCache(maxsize=512, ttl=3600)
 details_cache = TTLCache(maxsize=1024, ttl=3600)
@@ -21,11 +26,18 @@ class AnimeLokAPI:
             'Accept-Language': 'en-US,en;q=0.9',
         })
 
+    def _get(self, url, **kwargs):
+        target = _proxy_url(url) if SCRAPER_PROXY else url
+        return self.session.get(target, timeout=TIMEOUT, **kwargs)
+
+    def _proxy_url(self, target):
+        return f"{SCRAPER_PROXY}/proxy/stream?d={quote(target,safe='')}&api_password={SCRAPER_PROXY_PW}&h_user-agent={quote(UA,safe='')}"
+
     @cached(search_cache)
     def search_anime(self, query: str) -> list:
         results = []
         try:
-            resp = self.session.get(f'{BASE_URL}/home', timeout=TIMEOUT)
+            resp = self._get(f'{BASE_URL}/home', timeout=TIMEOUT)
             soup = BeautifulSoup(resp.text, 'html.parser')
             for a in soup.select('a[href*="/anime/"]'):
                 href = a.get('href', '')
@@ -54,7 +66,7 @@ class AnimeLokAPI:
     @cached(details_cache)
     def get_anime_details(self, slug: str) -> dict:
         try:
-            resp = self.session.get(f'{BASE_URL}/api/anime/{slug}/episodes/1', timeout=TIMEOUT)
+            resp = self._get(f'{BASE_URL}/api/anime/{slug}/episodes/1', timeout=TIMEOUT)
             if resp.status_code != 200: return None
             data = resp.json()
             anime = data.get('anime', data)
@@ -83,7 +95,7 @@ class AnimeLokAPI:
         """Returns all episodes as a list (we estimate, the API gives one at a time)"""
         # Fetch ep 1 to get info, then generate episode list
         try:
-            resp = self.session.get(f'{BASE_URL}/api/anime/{slug}/episodes/1', timeout=TIMEOUT)
+            resp = self._get(f'{BASE_URL}/api/anime/{slug}/episodes/1', timeout=TIMEOUT)
             if resp.status_code != 200: return []
             data = resp.json()
             episodes = []
@@ -107,7 +119,7 @@ class AnimeLokAPI:
 
     def get_episode_streams(self, slug: str, season: int, episode: int) -> dict:
         try:
-            resp = self.session.get(f'{BASE_URL}/api/anime/{slug}/episodes/{episode}', timeout=TIMEOUT)
+            resp = self._get(f'{BASE_URL}/api/anime/{slug}/episodes/{episode}', timeout=TIMEOUT)
             if resp.status_code != 200: return {'streams': []}
             data = resp.json()
             ep_data = data.get('episode', data)
@@ -182,7 +194,7 @@ class AnimeLokAPI:
             anilist_id = anime_data.get('anilistId', anime_data.get('id'))
             if anilist_id:
                 try:
-                    flix_resp = self.session.get(f'{BASE_URL}/api/flix/{anilist_id}/{episode}', timeout=TIMEOUT)
+                    flix_resp = self._get(f'{BASE_URL}/api/flix/{anilist_id}/{episode}', timeout=TIMEOUT)
                     if flix_resp.status_code == 200:
                         flix_data = flix_resp.json()
                         for sv in flix_data.get('servers', []):
