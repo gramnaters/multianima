@@ -37,6 +37,8 @@ PLAYER_MAP = {
     'turbovidhls.com': 'turbovid', 'emturbovid.com': 'turbovid',
     'player.abyssplayer.com': 'abyss', 'play.abyssplayer.com': 'abyss',
     'flixcloud.cc': 'flixcloud',
+    'megacloud.animanga.fun': 'megacloud', 'upcloud.animanga.fun': 'megacloud',
+    'megacloud': 'megacloud', 'mewstream': 'megacloud',
     'play.zephyrix.top': 'zephyrflick', 'play.zephyrflick.top': 'zephyrflick',
     'as-cdn21.top': 'zephyrflick', 'as-cdn22.top': 'zephyrflick', 'as-cdn23.top': 'zephyrflick',
     'vidsrc.xyz': 'vidsrc', 'vidsrc.wtf': 'vidsrc', 'vidsrc.me': 'vidsrc',
@@ -606,6 +608,57 @@ def extract_flixcloud(url):
     return {'streams': []}
 
 
+# ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+# MEGACLOUD / MEWSTREAM — proxy endpoint → m3u8 from cdn.mewstream.buzz
+# ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+def extract_megacloud(url):
+    """MegaCloud/MewStream - used by aniflix.us. Proxy endpoint returns m3u8."""
+    try:
+        resp = requests.get(url, headers={'User-Agent': UA, 'Referer': url}, timeout=TIMEOUT)
+        html = resp.text
+
+        # Try to find m3u8 directly in page
+        m3u8 = re.search(r'(https?://cdn\.mewstream\.buzz[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+        if m3u8:
+            return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'MegaCloud'}]}
+
+        # Try ArtPlayer config
+        art_config = re.search(r'art\s*=\s*new\s+Artplayer\s*\(\s*(\{.*?\})\s*\)', html, re.DOTALL)
+        if art_config:
+            config_text = art_config.group(1)
+            url_match = re.search(r'url\s*:\s*["\']([^"\']+)["\']', config_text)
+            if url_match:
+                video_url = url_match.group(1)
+                if 'mewstream' in video_url or '.m3u8' in video_url:
+                    return {'streams': [{'player': 'direct_m3u8', 'url': video_url, 'name': 'MegaCloud'}]}
+
+        # Try to find proxy URL pattern: /proxy?url={cdn_url}&headers={json}
+        proxy_match = re.search(r'/proxy\?url=([^&"\']+)', html)
+        if proxy_match:
+            from urllib.parse import unquote
+            cdn_url = unquote(proxy_match.group(1))
+            if 'mewstream' in cdn_url or '.m3u8' in cdn_url:
+                return {'streams': [{'player': 'direct_m3u8', 'url': cdn_url, 'name': 'MegaCloud'}]}
+
+        # Generic m3u8 extraction
+        m3u8_any = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+        if m3u8_any:
+            return {'streams': [{'player': 'direct_m3u8', 'url': m3u8_any.group(1), 'name': 'MegaCloud'}]}
+
+        # Try iframe redirect
+        iframe = re.search(r'iframe[^>]*src=["\']([^"\']+)["\']', html)
+        if iframe:
+            sub_player = classify_url(iframe.group(1))
+            sub_ex = EXTRACTORS.get(sub_player)
+            if sub_ex and sub_ex != extract_megacloud:
+                try:
+                    return sub_ex(iframe.group(1))
+                except: pass
+    except Exception as e:
+        print(f'[megacloud] error: {e}')
+    return {'streams': []}
+
+
 def extract_cloud_desidub(url):
     """CLOUD player (cloud.desidubanime.me) - follow redirect chain to get direct URL"""
     try:
@@ -648,6 +701,7 @@ EXTRACTORS = {
     'playmogo': extract_playmogo,
     'abyss': extract_abyss,
     'flixcloud': extract_flixcloud,
+    'megacloud': extract_megacloud,
     'cloud': extract_cloud_desidub,
 }
 
@@ -658,5 +712,5 @@ PLAYER_NAMES = {
     'streamhg': 'StreamHG', 'vidsrc': 'VidSrc', 'vidrocks': 'VidRocks',
     'zephyrflick': 'ZephyrFlick', 'moviesapi': 'MoviesAPI', 'videasy': 'Videasy',
     'playmogo': 'PlayMogo', 'abyss': 'Abyss Player', 'flixcloud': 'FlixCloud',
-    'direct_m3u8': 'Direct Stream',
+    'megacloud': 'MegaCloud', 'direct_m3u8': 'Direct Stream',
 }

@@ -74,10 +74,27 @@ class AnimeLokAPI:
             title = anime.get('title', '')
             anilist_id = anime.get('anilistId', anime.get('id'))
 
-            # Generate episode list
+            # Get actual episode count from episodes-range API
             episodes = []
-            for i in range(1, 13):
-                episodes.append({'season': 1, 'episode': i, 'title': f'Episode {i}', 'slug': slug})
+            try:
+                range_resp = self._get(f'{BASE_URL}/api/anime/{slug}/episodes-range?page=0&lang=HINDI&pageSize=200', timeout=TIMEOUT)
+                if range_resp.status_code == 200:
+                    range_data = range_resp.json()
+                    episodes_data = range_data.get('episodes', range_data.get('data', []))
+                    if isinstance(episodes_data, list) and episodes_data:
+                        for ep in episodes_data:
+                            ep_num = ep.get('number', ep.get('episodeNumber', ep.get('episode', 0)))
+                            season_num = ep.get('season', 1)
+                            ep_title = ep.get('title', f'Episode {ep_num}')
+                            episodes.append({
+                                'season': season_num, 'episode': ep_num,
+                                'title': ep_title, 'slug': slug, 'ep_num': ep_num,
+                            })
+            except: pass
+
+            if not episodes:
+                for i in range(1, 13):
+                    episodes.append({'season': 1, 'episode': i, 'title': f'Episode {i}', 'slug': slug})
 
             return {
                 'title': title,
@@ -93,21 +110,38 @@ class AnimeLokAPI:
             return None
 
     def get_episodes(self, slug: str) -> list:
-        """Returns all episodes as a list (we estimate, the API gives one at a time)"""
-        # Fetch ep 1 to get info, then generate episode list
+        """Returns all episodes using the episodes-range API"""
         try:
+            # Try episodes-range API first (returns all episodes at once)
+            resp = self._get(f'{BASE_URL}/api/anime/{slug}/episodes-range?page=0&lang=HINDI&pageSize=200', timeout=TIMEOUT)
+            if resp.status_code == 200:
+                data = resp.json()
+                episodes_data = data.get('episodes', data.get('data', []))
+                if isinstance(episodes_data, list) and episodes_data:
+                    episodes = []
+                    for ep in episodes_data:
+                        ep_num = ep.get('number', ep.get('episodeNumber', ep.get('episode', 0)))
+                        season_num = ep.get('season', 1)
+                        ep_title = ep.get('title', f'Episode {ep_num}')
+                        episodes.append({
+                            'season': season_num,
+                            'episode': ep_num,
+                            'title': ep_title,
+                            'slug': slug,
+                            'ep_num': ep_num,
+                        })
+                    if episodes:
+                        return episodes
+
+            # Fallback: try to get from episode 1 and generate
             resp = self._get(f'{BASE_URL}/api/anime/{slug}/episodes/1', timeout=TIMEOUT)
             if resp.status_code != 200: return []
             data = resp.json()
-            episodes = []
-            # We can't know total episodes, so generate based on what we have
-            # Try to get episodes-range
             anime = data.get('anime', data)
-            anilist_id = anime.get('anilistId', anime.get('id'))
-            title = anime.get('title', '')
+            total = anime.get('totalEpisodes', anime.get('episodesCount', 12))
 
-            # Generate default 12 episodes (Stremio will try more)
-            for i in range(1, 13):
+            episodes = []
+            for i in range(1, total + 1):
                 episodes.append({
                     'season': 1, 'episode': i,
                     'title': f'Episode {i}',
