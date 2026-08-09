@@ -3,11 +3,21 @@ from flask import Blueprint, abort
 from cachetools import TTLCache
 from app.api import ALL_PROVIDERS
 from app.routes.utils import respond_with, log_error
-from app.players import resolve_stream
+from app.players import resolve_stream, PLAYER_NAMES
 from app.config_parser import parse_config, get_provider_from_config, get_langs_from_config, get_quality_from_config, is_hide_non_seekable
 
 stream_bp = Blueprint('stream', __name__)
 tmdb_title_cache = TTLCache(maxsize=500, ttl=3600)
+
+
+PROVIDER_DISPLAY = {
+    'animelok': 'AnimeLok',
+    'watchanimeworld': 'AnimeWorld',
+    'animesalt': 'AnimeSalt',
+    'animejoker': 'AnimeJoker',
+    'desidubanime': 'DesiDub',
+    'bashapi': 'BashAPI',
+}
 
 
 def _tmdb_key():
@@ -39,34 +49,43 @@ def _search_providers_for_title(title, enabled_providers):
             items = provider.search_anime(title)
             for item in items:
                 results.append((pname, item['slug']))
-                break  # One match per provider
+                break
         except: pass
     return results
 
 
 def _quality_from_name(name):
-    """Extract quality hint from stream name"""
     name_lower = name.lower()
-    if '2160' in name_lower or '4k' in name_lower:
-        return 2160
-    if '1080' in name_lower:
-        return 1080
-    if '720' in name_lower:
-        return 720
-    if '480' in name_lower:
-        return 480
-    if '360' in name_lower:
-        return 360
-    return 720  # default
+    if '2160' in name_lower or '4k' in name_lower: return '4K'
+    if '1080' in name_lower: return '1080p'
+    if '720' in name_lower: return '720p'
+    if '480' in name_lower: return '480p'
+    if '360' in name_lower: return '360p'
+    return ''
 
 
-def _lang_from_name(name):
-    """Extract language hint from stream name"""
-    name_lower = name.lower()
-    for lang in ['hindi', 'tamil', 'telugu', 'english', 'japanese', 'malayalam', 'kannada']:
-        if lang in name_lower:
-            return lang
-    return 'hindi'  # default for our addon
+def _referer_for_url(url):
+    """Return the correct Referer header for a stream URL"""
+    if 'zephyrix' in url or 'zephyrflick' in url:
+        return 'https://play.zephyrix.top/'
+    if 'anvod' in url or 'af0' in url:
+        return 'https://bato.to/'
+    if 'uwucdn' in url or 'vault-0' in url:
+        return 'https://pahe.host/'
+    if 'hsastream' in url:
+        return 'https://animevilla.org/'
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    return f'{parsed.scheme}://{parsed.hostname}/'
+
+
+def _make_title(provider_name, player_key, extra=''):
+    site = PROVIDER_DISPLAY.get(provider_name, provider_name)
+    player = PLAYER_NAMES.get(player_key, player_key)
+    parts = [site, player]
+    if extra:
+        parts.append(extra)
+    return ' / '.join(parts)
 
 
 @stream_bp.route('/stream/<content_type>/<content_id>.json')
@@ -79,12 +98,10 @@ def addon_stream(content_type, content_id, lang=None, config_data=None):
     enabled_providers = get_provider_from_config(config)
     enabled_langs = get_langs_from_config(config)
     enabled_qualities = get_quality_from_config(config)
-    hide_non_seekable = is_hide_non_seekable(config)
 
     parts = content_id.split(':')
     season, episode = 1, 1
 
-    # Parse season/episode from end of ID
     if len(parts) >= 3 and parts[-2].isdigit() and parts[-1].isdigit():
         season = int(parts[-2])
         episode = int(parts[-1])
@@ -94,14 +111,12 @@ def addon_stream(content_type, content_id, lang=None, config_data=None):
 
     base_id = ':'.join(base_id_parts)
 
-    # Get TMDB ID from the id
     tmdb_id = None
     if base_id.startswith('tmdb:'):
         tmdb_id = base_id.replace('tmdb:', '')
     elif base_id.startswith('hd:tmdb:'):
         tmdb_id = base_id.replace('hd:tmdb:', '')
     elif base_id.startswith('tt'):
-        # IMDB → TMDB lookup
         try:
             r = requests.get('https://api.themoviedb.org/3/find/' + base_id,
                             params={'api_key': _tmdb_key(), 'external_source': 'imdb_id'}, timeout=10)
@@ -114,74 +129,67 @@ def addon_stream(content_type, content_id, lang=None, config_data=None):
     if not tmdb_id:
         return respond_with({'streams': []})
 
-    # Get title from TMDB
     title = _get_title_from_tmdb(tmdb_id)
     if not title:
         return respond_with({'streams': []})
 
-    # Search anime sites for this title
     provider_slugs = _search_providers_for_title(title, enabled_providers)
     if not provider_slugs:
         return respond_with({'streams': []})
 
-    # Collect streams from ALL matching providers
-    all_streams = []
+    # Collect streams from providers — keep provider info
+    raw_streams = []
     for pname, slug in provider_slugs[:5]:
         provider = ALL_PROVIDERS.get(pname)
         if not provider: continue
         try:
             data = provider.get_episode_streams(slug, season, episode)
             for sd in data.get('streams', []):
-                player_langs = [l.lower() for l in sd.get('languages', [])]
-                if player_langs and enabled_langs:
-                    if not any(pl in enabled_langs for pl in player_langs):
-                        continue
-                try:
-                    resolved = resolve_stream(sd)
-                    all_streams.extend(resolved)
-                except Exception as e:
-                    print(f'[stream] resolve: {e}')
+                sd['_provider'] = pname
+                raw_streams.append(sd)
         except Exception as e:
             print(f'[stream] provider {pname}: {e}')
 
-    # Filter and format
+    # Resolve all streams
     final = []
     seen = set()
-    for s in all_streams:
-        url = s.get('url', '')
-        if not url or url in seen:
-            continue
-        seen.add(url)
+    for sd in raw_streams:
+        pname = sd.get('_provider', 'unknown')
+        player_key = sd.get('player', 'generic_embed')
 
-        stream_name = s.get('name', 'Stream')
-        quality = _quality_from_name(stream_name)
-        audio_lang = _lang_from_name(stream_name)
-
-        # Quality filter
-        if enabled_qualities and quality not in enabled_qualities:
+        try:
+            resolved_list = resolve_stream(sd)
+        except Exception as e:
+            print(f'[stream] resolve error: {e}')
             continue
 
-        # Language filter
-        if enabled_langs and audio_lang not in enabled_langs:
-            continue
+        for resolved in resolved_list:
+            url = resolved.get('url', '')
+            if not url or url in seen:
+                continue
+            seen.add(url)
 
-        stream_obj = {
-            'title': f'{stream_name} [{quality}p]',
-            'name': stream_name,
-            'url': url,
-            'behaviorHints': {
-                'notWebReady': False,
-                'bingeGroup': f'multianima-{pname}',
-                'proxyHeaders': {
-                    'request': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            quality = _quality_from_name(url)
+            display_title = _make_title(pname, player_key, quality)
+
+            stream_obj = {
+                'title': display_title,
+                'name': display_title,
+                'url': url,
+                'behaviorHints': {
+                    'notWebReady': False,
+                    'bingeGroup': f'multianima-{pname}',
+                    'proxyHeaders': {
+                        'request': {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36',
+                            'Referer': _referer_for_url(url),
+                        }
                     }
-                }
-            },
-        }
-        if s.get('subtitles'):
-            stream_obj['subtitles'] = s['subtitles']
-        final.append(stream_obj)
+                },
+            }
+            if resolved.get('subtitles'):
+                stream_obj['subtitles'] = resolved['subtitles']
+            final.append(stream_obj)
 
     print(f'[stream] {content_id} => {len(final)} streams')
     return respond_with({'streams': final})
