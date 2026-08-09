@@ -32,6 +32,8 @@ BASE_MANIFEST = {
         {'key': 'source_animejoker', 'type': 'checkbox', 'title': 'AnimeJoker', 'default': 'checked'},
         {'key': 'source_desidubanime', 'type': 'checkbox', 'title': 'DesiDubAnime', 'default': 'checked'},
         {'key': 'source_bashapi', 'type': 'checkbox', 'title': 'BashAPI', 'default': 'unchecked'},
+        {'key': 'source_animevilla', 'type': 'checkbox', 'title': 'AnimeVilla', 'default': 'unchecked'},
+        {'key': 'source_aniflix', 'type': 'checkbox', 'title': 'Aniflix (needs TRAWL)', 'default': 'unchecked'},
         # Quality
         {'key': 'res_2160', 'type': 'checkbox', 'title': '4K', 'default': 'checked'},
         {'key': 'res_1080', 'type': 'checkbox', 'title': '1080p', 'default': 'checked'},
