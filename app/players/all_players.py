@@ -590,28 +590,8 @@ def extract_abyss(url):
 
 
 def extract_flixcloud(url):
-    """FlixCloud - try cloudscraper extraction. Falls back to empty."""
-    try:
-        from urllib.parse import urlparse, parse_qs
-        parsed = urlparse(url)
-        hash_id = parsed.path.split('/e/')[-1] if '/e/' in parsed.path else None
-        v = parse_qs(parsed.query).get('v', ['1'])[0] if parsed.query else '1'
-        if not hash_id: return {'streams': []}
-        # Try the API endpoint
-        api = f'https://flixcloud.cc/api/m3u8/{hash_id}'
-        resp = requests.get(api, headers={'User-Agent': UA, 'Referer': url}, timeout=TIMEOUT)
-        if resp.status_code == 200:
-            try:
-                data = resp.json()
-                m3u8_url = data.get('url') or data.get('file') or data.get('src')
-                if m3u8_url: return {'streams': [{'player': 'direct_m3u8', 'url': m3u8_url, 'name': 'FlixCloud'}]}
-            except: pass
-        # Try alternate API with v param
-        api2 = f'https://flixcloud.cc/player/{hash_id}?v={v}'
-        resp2 = requests.get(api2, headers={'User-Agent': UA, 'Referer': url}, timeout=TIMEOUT)
-        m3u8 = re.search(r'(https?://[^\s\"\'<>]+\.m3u8[^\s\"\'<>]*)', resp2.text)
-        if m3u8: return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'FlixCloud'}]}
-    except: pass
+    """FlixCloud - JWT token bound to browser IP. Needs Playwright to capture m3u8.
+    The resulting m3u8 URL is IP-bound, cannot be used from Stremio. Falls back to empty."""
     return {'streams': []}
 
 
