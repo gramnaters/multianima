@@ -25,31 +25,65 @@ def parse_config(segment: str) -> dict:
 
 def _default_config():
     return {
-        'src_animelok': 'on', 'src_watchanimeworld': 'on', 'src_animesalt': 'on',
-        'src_animejoker': 'on', 'src_desidubanime': 'on',
-        'l_hindi': 'on', 'l_tamil': 'on', 'l_telugu': 'on',
-        'l_english': 'on', 'l_japanese': 'on',
-        'q_1080': 'on', 'q_720': 'on', 'q_480': 'on',
-        'plr_gdmirrorbot': 'on', 'plr_vidmoly': 'on', 'plr_streamruby': 'on',
-        'plr_doodstream': 'on', 'plr_streamtape': 'on', 'plr_turbovid': 'on',
-        'plr_streamp2p': 'on', 'plr_rpmstream': 'on', 'plr_upnshare': 'on',
-        'plr_vidsrc': 'on', 'plr_zephyrflick': 'on', 'plr_streamhg': 'on',
-        'plr_vidrocks': 'on', 'plr_abyss': 'on', 'plr_flixcloud': 'on',
-        'plr_moviesapi': 'on', 'plr_videasy': 'on', 'plr_playmogo': 'on',
-        'subs': 'on', 'proxy': 'off', 'timeout': '15', 'max': '15',
+        'source_animelok': 'on',
+        'source_watchanimeworld': 'on',
+        'source_animesalt': 'on',
+        'source_animejoker': 'on',
+        'source_desidubanime': 'on',
+        'source_bashapi': 'off',
+        'res_2160': 'on', 'res_1080': 'on', 'res_720': 'on', 'res_480': 'on', 'res_360': 'on',
+        'audio_hindi': 'on', 'audio_tamil': 'on', 'audio_telugu': 'on',
+        'audio_english': 'on', 'audio_japanese': 'on',
+        'audio_malayalam': 'off', 'audio_kannada': 'off',
+        'subtitles_disabled': 'off', 'hide_non_seekable': 'off',
     }
 
 
 def get_provider_from_config(config: dict) -> list:
-    return [k.replace('src_', '') for k in config if k.startswith('src_') and config[k] == 'on']
+    """Get enabled providers from config"""
+    providers = []
+    for k, v in config.items():
+        if k.startswith('source_') and v == 'on':
+            providers.append(k.replace('source_', ''))
+    return providers
 
 
 def get_players_from_config(config: dict) -> list:
-    return [k.replace('plr_', '') for k in config if k.startswith('plr_') and config[k] == 'on']
+    """Get enabled players from config"""
+    players = []
+    for k, v in config.items():
+        if k.startswith('plr_') and v == 'on':
+            players.append(k.replace('plr_', ''))
+    return players
 
 
 def get_langs_from_config(config: dict) -> list:
-    return [k.replace('l_', '') for k in config if k.startswith('l_') and config[k] == 'on']
+    """Get enabled audio languages from config"""
+    langs = []
+    for k, v in config.items():
+        if k.startswith('audio_') and v == 'on':
+            langs.append(k.replace('audio_', ''))
+    return langs
+
+
+def get_quality_from_config(config: dict) -> list:
+    """Get enabled quality levels from config"""
+    qualities = []
+    for k, v in config.items():
+        if k.startswith('res_') and v == 'on':
+            try:
+                qualities.append(int(k.replace('res_', '')))
+            except:
+                pass
+    return sorted(qualities, reverse=True)
+
+
+def is_hide_non_seekable(config: dict) -> bool:
+    return config.get('hide_non_seekable') == 'on'
+
+
+def is_subtitles_disabled(config: dict) -> bool:
+    return config.get('subtitles_disabled') == 'on'
 
 
 def encode_config(config: dict) -> str:

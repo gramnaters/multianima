@@ -831,11 +831,48 @@ def extract_hsastream(url):
 
 
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+# GENERIC EMBED — try to extract m3u8 from any embed page
+# ∎∎∎∎∎∎∎∎ ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
+def extract_generic_embed(url):
+    """Last resort: fetch embed page and look for m3u8/mp4 URLs"""
+    try:
+        resp = requests.get(url, headers={
+            'User-Agent': UA,
+            'Referer': url,
+            'Accept': 'text/html,application/xhtml+xml',
+        }, timeout=TIMEOUT)
+        html = resp.text
+
+        m3u8s = re.findall(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+        if m3u8s:
+            return {'streams': [{'player': 'direct_m3u8', 'url': m3u8s[0], 'name': 'Generic/Direct'}]}
+
+        mp4s = re.findall(r'(https?://[^\s"\'<>]+\.mp4[^\s"\'<>]*)', html)
+        if mp4s:
+            return {'streams': [{'player': 'direct_m3u8', 'url': mp4s[0], 'name': 'Generic/Direct'}]}
+
+        iframe = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', html)
+        if iframe:
+            iframe_url = iframe.group(1)
+            if iframe_url.startswith('//'):
+                iframe_url = 'https:' + iframe_url
+            player = classify_url(iframe_url)
+            extractor = EXTRACTORS.get(player)
+            if extractor and extractor != extract_generic_embed:
+                return extractor(iframe_url)
+
+    except Exception as e:
+        print(f'[generic_embed] error: {e}')
+    return {'streams': []}
+
+
+# ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 # REGISTRY
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 
 EXTRACTORS = {
     'direct_m3u8': extract_direct_m3u8,
+    'generic_embed': extract_generic_embed,
     'gdmirrorbot': extract_gdmirrorbot,
     'vidmoly': extract_vidmoly,
     'streamruby': extract_streamruby,

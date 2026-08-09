@@ -4,7 +4,7 @@ from cachetools import TTLCache
 from app.api import ALL_PROVIDERS
 from app.routes.utils import respond_with, log_error
 from app.players import resolve_stream
-from app.config_parser import parse_config, get_provider_from_config, get_langs_from_config
+from app.config_parser import parse_config, get_provider_from_config, get_langs_from_config, get_quality_from_config, is_hide_non_seekable
 
 stream_bp = Blueprint('stream', __name__)
 tmdb_title_cache = TTLCache(maxsize=500, ttl=3600)
@@ -44,6 +44,31 @@ def _search_providers_for_title(title, enabled_providers):
     return results
 
 
+def _quality_from_name(name):
+    """Extract quality hint from stream name"""
+    name_lower = name.lower()
+    if '2160' in name_lower or '4k' in name_lower:
+        return 2160
+    if '1080' in name_lower:
+        return 1080
+    if '720' in name_lower:
+        return 720
+    if '480' in name_lower:
+        return 480
+    if '360' in name_lower:
+        return 360
+    return 720  # default
+
+
+def _lang_from_name(name):
+    """Extract language hint from stream name"""
+    name_lower = name.lower()
+    for lang in ['hindi', 'tamil', 'telugu', 'english', 'japanese', 'malayalam', 'kannada']:
+        if lang in name_lower:
+            return lang
+    return 'hindi'  # default for our addon
+
+
 @stream_bp.route('/stream/<content_type>/<content_id>.json')
 @stream_bp.route('/<lang>/stream/<content_type>/<content_id>.json')
 @stream_bp.route('/<config_data>/stream/<content_type>/<content_id>.json')
@@ -53,7 +78,8 @@ def addon_stream(content_type, content_id, lang=None, config_data=None):
     config = parse_config(config_data or '')
     enabled_providers = get_provider_from_config(config)
     enabled_langs = get_langs_from_config(config)
-    max_streams = int(config.get('max', 15))
+    enabled_qualities = get_quality_from_config(config)
+    hide_non_seekable = is_hide_non_seekable(config)
 
     parts = content_id.split(':')
     season, episode = 1, 1
@@ -100,7 +126,7 @@ def addon_stream(content_type, content_id, lang=None, config_data=None):
 
     # Collect streams from ALL matching providers
     all_streams = []
-    for pname, slug in provider_slugs[:3]:
+    for pname, slug in provider_slugs[:5]:
         provider = ALL_PROVIDERS.get(pname)
         if not provider: continue
         try:
@@ -118,20 +144,34 @@ def addon_stream(content_type, content_id, lang=None, config_data=None):
         except Exception as e:
             print(f'[stream] provider {pname}: {e}')
 
-    # Deduplicate
+    # Filter and format
     final = []
     seen = set()
-    for s in all_streams[:max_streams]:
-        key = s.get('url', '')
-        if not key or key in seen: continue
-        seen.add(key)
+    for s in all_streams:
+        url = s.get('url', '')
+        if not url or url in seen:
+            continue
+        seen.add(url)
+
+        stream_name = s.get('name', 'Stream')
+        quality = _quality_from_name(stream_name)
+        audio_lang = _lang_from_name(stream_name)
+
+        # Quality filter
+        if enabled_qualities and quality not in enabled_qualities:
+            continue
+
+        # Language filter
+        if enabled_langs and audio_lang not in enabled_langs:
+            continue
+
         stream_obj = {
-            'title': s.get('title', 'Stream'),
-            'name': s.get('name', 'Stream'),
-            'url': s['url'],
+            'title': f'{stream_name} [{quality}p]',
+            'name': stream_name,
+            'url': url,
             'behaviorHints': {
                 'notWebReady': False,
-                'bingeGroup': s.get('name', 'multianima'),
+                'bingeGroup': f'multianima-{pname}',
                 'proxyHeaders': {
                     'request': {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',

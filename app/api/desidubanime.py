@@ -83,50 +83,35 @@ class DesiDubAnimeAPI:
             return None
 
     def _discover_episodes(self, anime_slug, episode_count):
-        """Try watch page URL patterns to find actual episode list"""
+        """Try 1 watch page URL pattern with quick probe, then generate synthetic episodes"""
         episodes = []
-        if episode_count <= 0:
-            episode_count = 999
+        max_eps = min(episode_count, 300) if episode_count > 0 else 300
 
-        patterns = [
-            f'{anime_slug}-episode-{{n}}',
-            f'{anime_slug}-ep-{{n}}',
-            f'{anime_slug}-hindi-dubbed-episode-{{n}}',
-        ]
+        probe_url = f'{BASE_URL}/watch/{anime_slug}-episode-1/'
+        try:
+            r = self._get(probe_url, headers={'Accept': 'text/html'}, timeout=8)
+            if r.status_code == 200 and 'hsastream' in r.text.lower():
+                pattern = f'{anime_slug}-episode-{{n}}'
+                for n in range(1, max_eps + 1):
+                    ep_slug = pattern.replace('{{n}}', str(n))
+                    episodes.append({
+                        'season': 1, 'episode': n,
+                        'title': f'Episode {n}',
+                        'slug': ep_slug,
+                        'ep_page_url': f'{BASE_URL}/watch/{ep_slug}/',
+                    })
+                return episodes
+        except:
+            pass
 
-        for pattern_tpl in patterns:
-            found_any = False
-            for n in range(1, min(episode_count, 50) + 1):
-                ep_slug = pattern_tpl.replace('{{n}}', str(n))
-                watch_url = f'{BASE_URL}/watch/{ep_slug}/'
-                try:
-                    r = self._get(watch_url, headers={'Accept': 'text/html'})
-                    if r.status_code == 200 and 'hsastream' in r.text.lower():
-                        if not found_any:
-                            episodes = []
-                        found_any = True
-                        episodes.append({
-                            'season': 1, 'episode': n,
-                            'title': f'Episode {n}',
-                            'slug': ep_slug,
-                            'ep_page_url': watch_url,
-                        })
-                    elif found_any:
-                        break
-                except:
-                    continue
-            if found_any:
-                break
-
-        if not episodes:
-            for n in range(1, min(episode_count + 1, 13)):
-                ep_slug = f'{anime_slug}-episode-{n}'
-                episodes.append({
-                    'season': 1, 'episode': n,
-                    'title': f'Episode {n}',
-                    'slug': ep_slug,
-                    'ep_page_url': f'{BASE_URL}/watch/{ep_slug}/',
-                })
+        for n in range(1, max_eps + 1):
+            ep_slug = f'{anime_slug}-episode-{n}'
+            episodes.append({
+                'season': 1, 'episode': n,
+                'title': f'Episode {n}',
+                'slug': ep_slug,
+                'ep_page_url': f'{BASE_URL}/watch/{ep_slug}/',
+            })
 
         return episodes
 
