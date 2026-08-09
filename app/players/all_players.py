@@ -22,6 +22,43 @@ from bs4 import BeautifulSoup
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36'
 TIMEOUT = 15
 
+
+def _unpack_js(packed_js):
+    """Unpack eval(function(p,a,c,k,e,d){...}) obfuscated JavaScript."""
+    m = re.search(
+        r"eval\(function\(p,a,c,k,e,d\)\{.+?\}\('(.+?)',(\d+),(\d+),'([^']+)'\.split\('\|'\)",
+        packed_js, re.DOTALL
+    )
+    if not m:
+        return packed_js
+    p_str, a, c, k = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4).split('|')
+    d = {}
+    i = 0
+    while i < c:
+        d[str(i)] = k[i] if i < len(k) else str(i)
+        i += 1
+    return re.sub(r'\b\d+\b', lambda m: d.get(m.group(0), m.group(0)), p_str)
+
+
+def _find_packed_js(html):
+    """Find eval(p,a,c,k,e,d) block in HTML and unpack it. Returns unpacked code or original html."""
+    packed = re.search(r"eval\(function\(p,a,c,k,e,d\)\{", html)
+    if not packed:
+        return html
+    start = packed.start()
+    depth = 0
+    end = start
+    for i in range(start, min(start + 100000, len(html))):
+        if html[i] == '(':
+            depth += 1
+        elif html[i] == ')':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    return _unpack_js(html[start:end])
+
+
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 # GLOBAL DISPATCHER
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
@@ -29,7 +66,7 @@ TIMEOUT = 15
 PLAYER_MAP = {
     'gdmirrorbot.nl': 'gdmirrorbot', 'pro.iqsmartgames.com': 'gdmirrorbot',
     'vidmoly.org': 'vidmoly', 'vidmoly.net': 'vidmoly', 'vidmoly.biz': 'vidmoly',
-    'streamruby.com': 'streamruby',
+    'streamruby.com': 'streamruby', 'rubystm.com': 'streamruby',
     'dood.li': 'doodstream', 'dood.to': 'doodstream', 'dood.ws': 'doodstream',
     'streamtape.site': 'streamtape', 'streamtape.com': 'streamtape',
     'p2pplay.pro': 'streamp2p', '.strp': 'streamp2p',
@@ -116,50 +153,98 @@ def extract_direct_m3u8(url):
 # GDMIRRORBOT — POST → base64 decode mresult → construct sub-host URLs
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 def extract_gdmirrorbot(url):
-    sid = url.rstrip('/').split('/')[-1] if '/embed/' in url else url.split('#')[-1].split('?')[0]
-    referer = f'https://gdmirrorbot.nl/embed/{sid}'
+    """GDMirrorBot - extract streams from gdmirrorbot.nl embeds.
 
-    resp = requests.post('https://pro.iqsmartgames.com/embedhelper2.php', headers={
-        'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': 'https://gdmirrorbot.nl', 'Referer': referer,
-    }, data={'sid': sid, 'UserFavSite': '', 'currentDomain': '[]'}, timeout=TIMEOUT)
-    data = resp.json()
+    Flow:
+    1. POST to embedhelper2.php with sid -> get sources dict + mresult
+    2. mresult is base64-encoded JSON with {sourceKey: streamId} pairs
+    3. Each source has siteUrl + streamId -> construct full embed URL
+    4. Recursively extract each sub-host (StreamHG, DoodStream, etc.)
+    """
+    try:
+        sid = url.rstrip('/').split('/')[-1] if '/embed/' in url else url.split('#')[-1].split('?')[0]
+        referer = f'https://gdmirrorbot.nl/embed/{sid}'
 
-    if data.get('domain_blocked'):
-        return {'streams': []}
+        resp = requests.post('https://pro.iqsmartgames.com/embedhelper2.php', headers={
+            'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded',
+            'Origin': 'https://gdmirrorbot.nl', 'Referer': referer,
+        }, data={'sid': sid, 'UserFavSite': '', 'currentDomain': '[]'}, timeout=TIMEOUT)
+        data = resp.json()
 
-    sources = data.get('sources', {})
-    mresult_raw = data.get('mresult', '{}')
-    mresult = json.loads(base64.b64decode(mresult_raw)) if isinstance(mresult_raw, str) else {}
-    streams = []
+        if data.get('domain_blocked'):
+            return {'streams': []}
 
-    if isinstance(sources, list):
-        sources = {s.get('key', str(i)): s for i, s in enumerate(sources) if isinstance(s, dict)}
+        sources = data.get('sources', {})
+        mresult_raw = data.get('mresult', '{}')
+        mresult = {}
+        try:
+            mresult = json.loads(base64.b64decode(mresult_raw)) if isinstance(mresult_raw, str) else {}
+        except:
+            pass
+        streams = []
 
-    for key, cfg in sources.items():
-        skey = mresult.get(key)
-        if not skey: continue
-        sub_url = cfg['siteUrl'] + skey + (cfg.get('embed_suffix') or '')
-        player_type = classify_url(sub_url)
+        if isinstance(sources, list):
+            sources = {s.get('key', str(i)): s for i, s in enumerate(sources) if isinstance(s, dict)}
 
-        # Try recursive extraction for known sub-hosts
-        sub_extractor = EXTRACTORS.get(player_type)
-        if sub_extractor and sub_extractor != extract_gdmirrorbot:
-            try:
-                result = sub_extractor(sub_url)
-                for s in result.get('streams', []):
-                    s['name'] = f"GDM/{cfg.get('friendlyName', key)}/{s.get('name','')}"
-                    streams.append(s)
+        for key, cfg in sources.items():
+            site_url = cfg.get('siteUrl', '')
+            friendly_name = cfg.get('friendlyName', key)
+            embed_suffix = cfg.get('embed_suffix') or ''
+
+            stream_id = mresult.get(key, '')
+            if not stream_id or not site_url:
                 continue
-            except: pass
 
-        streams.append({
-            'player': player_type,
-            'url': sub_url,
-            'name': f"GDM/{cfg.get('friendlyName', key)}",
-        })
+            sub_url = site_url + stream_id + embed_suffix
+            player_type = classify_url(sub_url)
 
+            sub_extractor = EXTRACTORS.get(player_type)
+            if sub_extractor and sub_extractor != extract_gdmirrorbot:
+                try:
+                    result = sub_extractor(sub_url)
+                    if result.get('streams'):
+                        for s in result.get('streams', []):
+                            s['name'] = f"GDM/{friendly_name}/{s.get('name','')}"
+                            streams.append(s)
+                        continue
+                except Exception as e:
+                    print(f'[gdmirrorbot] {friendly_name} extraction failed: {e}')
+
+            streams.append({
+                'player': 'generic_embed',
+                'url': sub_url,
+                'name': f"GDM/{friendly_name}",
+            })
+    except Exception as e:
+        print(f'[gdmirrorbot] error: {e}')
     return {'streams': streams}
+
+
+def _decrypt_gdm_value(encrypted_b64):
+    """Decrypt GDMirrorBot encrypted value (AES-CBC)"""
+    try:
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import unpad
+        raw = base64.b64decode(encrypted_b64)
+        iv = raw[:16]
+        ciphertext = raw[16:]
+        # Try common keys
+        for key in [
+            hashlib.md5(b'gdmirrorbot').digest(),
+            hashlib.md5(b'iqsmartgames').digest(),
+            hashlib.md5(b'embedhelper2').digest(),
+        ]:
+            try:
+                cipher = AES.new(key, AES.MODE_CBC, iv)
+                decrypted = unpad(cipher.decrypt(ciphertext), AES.block_size)
+                result = decrypted.decode('utf-8')
+                if result.startswith('http') or result.startswith('/'):
+                    return result
+            except:
+                continue
+        return ''
+    except:
+        return ''
 
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 # VIDMOLY — direct regex from JW Player inline config
@@ -179,62 +264,177 @@ def extract_vidmoly(url):
 # STREAMRUBY — POST /dl → unpack JS → regex m3u8
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 def extract_streamruby(url):
-    match = re.search(r'/e/(\w+)', url)
-    if not match: return {'streams': []}
-    fid = match.group(1)
+    """StreamRuby (streamruby.com or rubystm.com) - extract m3u8 from embed page.
 
-    resp = requests.post('https://streamruby.com/dl', headers={
-        'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded',
-        'Referer': url,
-    }, data={'op': 'embed', 'file_code': fid, 'auto': '1', 'referer': ''}, timeout=TIMEOUT)
-    html = resp.text
+    The /e/{code}.html page has a simple script constructing a URL from the path code.
+    Tries: direct m3u8 search, /d/{code} path, API endpoints, and iframe redirects.
+    """
+    try:
+        match = re.search(r'/e/(\w+)', url)
+        if not match:
+            return {'streams': []}
+        fid = match.group(1)
 
-    # Unpack PACKER JS
-    packer = re.search(r"\}\('(.*?)',(\d+),(\d+),'([^']+)'\.split\('\|'\)", html)
-    if packer:
-        ps, radix, count, keys_str = packer.groups()
-        keys = keys_str.split('|')
+        parsed = urlparse(url)
+        host = parsed.hostname or 'streamruby.com'
+        base = f'https://{host}'
+        headers = {'User-Agent': UA, 'Referer': url}
+
+        # 1. Fetch the /e/{code}.html page directly
+        for path in [f'/e/{fid}.html', f'/e/{fid}']:
+            try:
+                resp = requests.get(f'{base}{path}', headers=headers, timeout=TIMEOUT, allow_redirects=True)
+                html = resp.text
+
+                # Check for m3u8 directly in the page
+                m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+                if m3u8:
+                    return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'StreamRuby'}]}
+
+                # Check for iframe redirect
+                iframe = re.search(r'iframe[^>]*src=["\']([^"\']+)["\']', html)
+                if iframe:
+                    iframe_url = iframe.group(1)
+                    if iframe_url.startswith('//'):
+                        iframe_url = 'https:' + iframe_url
+                    player = classify_url(iframe_url)
+                    extractor = EXTRACTORS.get(player)
+                    if extractor and extractor != extract_streamruby:
+                        try:
+                            return extractor(iframe_url)
+                        except: pass
+
+                # Check for JS-constructed URL pattern (e.g. var url = "..." + code + "...")
+                url_construct = re.search(r'(?:var\s+\w+\s*=\s*|url\s*[=:]\s*["\'])(https?://[^"\']+)', html)
+                if url_construct:
+                    try:
+                        r2 = requests.get(url_construct.group(1), headers=headers, timeout=TIMEOUT, allow_redirects=True)
+                        m3u8_2 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', r2.text)
+                        if m3u8_2:
+                            return {'streams': [{'player': 'direct_m3u8', 'url': m3u8_2.group(1), 'name': 'StreamRuby'}]}
+                    except: pass
+
+                # Check for sources block
+                sources = re.search(r'sources:\s*\[(.*?)\]', html, re.DOTALL)
+                if sources:
+                    fm = re.search(r'file:\s*["\']([^"\']+)["\']', sources.group(1))
+                    if fm:
+                        return {'streams': [{'player': 'direct_m3u8', 'url': fm.group(1), 'name': 'StreamRuby'}]}
+            except: pass
+
+        # 2. Try /d/{code} path (common download endpoint)
+        for dl_path in [f'/dl/{fid}', f'/d/{fid}']:
+            try:
+                resp = requests.get(f'{base}{dl_path}', headers=headers, timeout=TIMEOUT, allow_redirects=True)
+                m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', resp.text)
+                if m3u8:
+                    return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'StreamRuby'}]}
+            except: pass
+
+        # 3. Try API endpoints
+        for api_path in [f'/dl/{fid}', f'/api/{fid}', f'/api/video/{fid}',
+                         f'/api/v1/video/{fid}', f'/api/stream/{fid}']:
+            try:
+                resp = requests.get(f'{base}{api_path}', headers={
+                    **headers, 'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json',
+                }, timeout=TIMEOUT)
+                if resp.status_code == 200:
+                    try:
+                        data = resp.json()
+                        for key in ['url', 'file', 'src', 'hls', 'stream', 'source']:
+                            val = data.get(key)
+                            if isinstance(val, str) and ('http' in val or '.m3u8' in val):
+                                return {'streams': [{'player': 'direct_m3u8', 'url': val, 'name': 'StreamRuby'}]}
+                            if isinstance(val, dict):
+                                inner = val.get('url') or val.get('file') or val.get('src')
+                                if inner and ('http' in inner or '.m3u8' in inner):
+                                    return {'streams': [{'player': 'direct_m3u8', 'url': inner, 'name': 'StreamRuby'}]}
+                    except: pass
+                    # Maybe raw m3u8 in response
+                    m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', resp.text)
+                    if m3u8:
+                        return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'StreamRuby'}]}
+            except: pass
+
+        # 4. Try POST /dl (original approach as last resort)
         try:
-            html = re.sub(r'\b\w+\b', lambda w: keys[int(w.group(), int(radix))] if w.group().isalnum() and int(w.group(), int(radix)) < len(keys) else w.group(), ps)
+            resp = requests.post(f'{base}/dl', headers={
+                **headers, 'Content-Type': 'application/x-www-form-urlencoded',
+            }, data={'op': 'embed', 'file_code': fid, 'auto': '1', 'referer': ''}, timeout=TIMEOUT)
+            html = resp.text
+
+            unpacked = _find_packed_js(html)
+            html += '\n' + unpacked
+
+            m3u8 = re.search(r'(?:file|src|url)\s*[=:]\s*["\']([^"\']+\.m3u8[^"\']*)["\']', html)
+            if m3u8:
+                return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'StreamRuby'}]}
+
+            sources = re.search(r'sources:\s*\[(.*?)\]', html, re.DOTALL)
+            if sources:
+                fm = re.search(r'file:\s*["\']([^"\']+)["\']', sources.group(1))
+                if fm:
+                    return {'streams': [{'player': 'direct_m3u8', 'url': fm.group(1), 'name': 'StreamRuby'}]}
         except: pass
 
-    m3u8 = re.search(r'file:\s*"(https?://[^"]*\.m3u8[^"]*)"', html)
-    if m3u8:
-        return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'StreamRuby'}]}
-
-    sources = re.search(r'sources:\s*\[(.*?)\]', html, re.DOTALL)
-    if sources:
-        fm = re.search(r'file:\s*"([^"]+)"', sources.group(1))
-        if fm:
-            return {'streams': [{'player': 'direct_m3u8', 'url': fm.group(1), 'name': 'StreamRuby'}]}
+    except Exception as e:
+        print(f'[streamruby] error: {e}')
     return {'streams': []}
 
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 # DOODSTREAM — pass_md5 + download endpoint
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 def extract_doodstream(url):
-    resp = requests.get(url, headers={'User-Agent': UA}, timeout=TIMEOUT)
-    html = resp.text
-    base = '/'.join(url.split('/')[:3])
+    """DoodStream - pass_md5 + download endpoint.
 
-    # /download/ path
-    dl = re.search(r"\$\.get\('(/download/[^']+)'", html)
-    if dl:
-        dr = requests.get(base + dl.group(1), headers={'Referer': url}, timeout=TIMEOUT)
-        return {'streams': [{'player': 'direct_m3u8', 'url': dr.url, 'name': 'Dood'}]}
+    Flow:
+    1. Fetch the page
+    2. Look for /pass_md5/{token}/{hash} path in the page JS
+    3. Look for ?token=...&expiry= suffix pattern
+    4. GET the pass_md5 endpoint with XHR headers
+    5. Build final URL: pass_md5_response + random_string + token_suffix
+    """
+    try:
+        resp = requests.get(url, headers={'User-Agent': UA, 'Referer': url}, timeout=TIMEOUT)
+        html = resp.text
+        base = '/'.join(url.split('/')[:3])
 
-    # pass_md5 pattern
-    pm = re.search(r"pass_md5[=:]\s*['\"]([^'\"]+)", html)
-    if pm:
-        pr = requests.get(f'{base}/pass_md5/{pm.group(1)}', headers={'Referer': url}, timeout=TIMEOUT)
-        fm = re.search(r'(https?://[^\s\'\"<>]+\.(?:mp4|m3u8)[^\s\'\"<>]*)', pr.text)
+        pass_md5_match = re.search(r"(/pass_md5/[^\s'\"<>]+)", html)
+        if not pass_md5_match:
+            pass_md5_match = re.search(r"pass_md5[=/]([^\s'\"<>]+)", html)
+
+        token_suffix = re.search(r"\?token=([^&\"'\s]+)&expiry=(\d+)", html)
+
+        if pass_md5_match:
+            pass_md5_path = pass_md5_match.group(1)
+            if not pass_md5_path.startswith('/'):
+                pass_md5_path = '/' + pass_md5_path
+
+            pr = requests.get(
+                base + pass_md5_path,
+                headers={
+                    'User-Agent': UA,
+                    'Referer': url,
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                timeout=TIMEOUT
+            )
+
+            if pr.status_code == 200 and pr.text.strip():
+                download_url = pr.text.strip()
+                random_str = secrets.token_hex(5)
+                if token_suffix:
+                    final_url = f"{download_url}{random_str}?token={token_suffix.group(1)}&expiry={token_suffix.group(2)}"
+                else:
+                    final_url = f"{download_url}{random_str}"
+                return {'streams': [{'player': 'direct_m3u8', 'url': final_url, 'name': 'DoodStream'}]}
+
+        fm = re.search(r'file:\s*["\']([^"\']+)["\']', html)
         if fm:
-            return {'streams': [{'player': 'direct_m3u8', 'url': fm.group(1), 'name': 'Dood'}]}
-
-    # Direct file
-    fm = re.search(r'file:\s*"([^"]+)"', html)
-    if fm:
-        return {'streams': [{'player': 'direct_m3u8', 'url': fm.group(1), 'name': 'Dood'}]}
+            return {'streams': [{'player': 'direct_m3u8', 'url': fm.group(1), 'name': 'DoodStream'}]}
+    except Exception as e:
+        print(f'[doodstream] error: {e}')
     return {'streams': []}
 
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
@@ -316,12 +516,26 @@ def _extract_p2p_family(url, api_host=None):
     s.headers.update({'User-Agent': UA, 'Accept': '*/*', 'Origin': f'https://{host}', 'Referer': url})
 
     results = []
+
+    # Step 1: Get decryption key from player endpoint
+    decrypt_key = None
+    try:
+        r_player = s.get(f'https://{host}/api/v1/player?t={video_id}', timeout=TIMEOUT)
+        if r_player.status_code == 200:
+            player_data = r_player.json()
+            if player_data.get('success') and player_data.get('k'):
+                decrypt_key = player_data['k']
+    except:
+        pass
+
+    # Step 2: Get video data and decrypt
     for ep in [f'/api/v1/video?id={video_id}&w=1920&h=1080&r={host}',
-               f'/api/v1/player?t={video_id}',
-               f'/api/v1/info?id={video_id}&w=1920&h=1080&r={host}']:
+               f'/api/v1/info?id={video_id}&w=1920&h=1080&r={host}',
+               f'/api/v1/video?id={video_id}&w=360&h=800&r={host}']:
         try:
             r = s.get(f'https://{host}{ep}', timeout=TIMEOUT)
-            if r.status_code != 200: continue
+            if r.status_code != 200:
+                continue
             try:
                 data = r.json()
                 stream = _extract_video_from_json(data)
@@ -329,16 +543,26 @@ def _extract_p2p_family(url, api_host=None):
                     results.append({'player': 'direct_m3u8', 'url': stream, 'name': host.split('.')[0]})
                     break
             except:
-                # Try AES-CBC decryption
+                # Try AES-CBC decryption with key from player
                 try:
+                    if decrypt_key:
+                        dec = _decrypt_aes_cbc_with_key(r.text, decrypt_key)
+                        data = json.loads(dec)
+                        stream = _extract_video_from_json(data)
+                        if stream:
+                            results.append({'player': 'direct_m3u8', 'url': stream, 'name': host.split('.')[0]})
+                            break
+                    # Fallback to default decryption
                     dec = _decrypt_aes_cbc(r.text, host)
                     data = json.loads(dec)
                     stream = _extract_video_from_json(data)
                     if stream:
                         results.append({'player': 'direct_m3u8', 'url': stream, 'name': host.split('.')[0]})
                         break
-                except: pass
-        except: pass
+                except:
+                    pass
+        except:
+            pass
 
     return {'streams': results}
 
@@ -365,6 +589,39 @@ def _decrypt_aes_cbc(hex_data, host):
     cipher = AES.new(key, AES.MODE_CBC, iv=b'\x00' * 16)
     return unpad(cipher.decrypt(bytes.fromhex(hex_data)), AES.block_size).decode()
 
+
+def _decrypt_aes_cbc_with_key(hex_data, key_str):
+    """Decrypt AES-CBC with a key string from player endpoint.
+    key_str is the raw 24-char key from /api/v1/player, used directly as AES-192 key.
+    Encrypted data: first 16 bytes IV, rest is ciphertext. Result is JSON with hls/source."""
+    try:
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import unpad
+        # Use key_str directly as AES key (24 bytes = AES-192)
+        key = key_str.encode('utf-8')[:24]
+        # Strip any non-hex chars and decode
+        cleaned = re.sub(r'[^0-9a-fA-F]', '', hex_data)
+        raw = bytes.fromhex(cleaned)
+        iv = raw[:16]
+        ciphertext = raw[16:]
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        decrypted = unpad(cipher.decrypt(ciphertext), AES.block_size)
+        return decrypted.decode('utf-8')
+    except:
+        try:
+            from Crypto.Cipher import AES
+            from Crypto.Util.Padding import unpad
+            # Fallback: try MD5-derived 16-byte key with null IV
+            key = hashlib.md5(key_str.encode()).digest()
+            cleaned = re.sub(r'[^0-9a-fA-F]', '', hex_data)
+            raw = bytes.fromhex(cleaned)
+            iv = raw[:16] if len(raw) >= 16 else b'\x00' * 16
+            ciphertext = raw[16:] if len(raw) >= 16 else raw
+            cipher = AES.new(key, AES.MODE_CBC, iv)
+            return unpad(cipher.decrypt(ciphertext), AES.block_size).decode()
+        except:
+            return None
+
 def extract_streamp2p(url):
     return _extract_p2p_family(url)
 
@@ -372,10 +629,135 @@ def extract_rpmstream(url):
     return _extract_p2p_family(url)
 
 def extract_upnshare(url):
+    """UPNShare - Vite+React SPA. Fragment #video_id is the video ID.
+
+    Tries /api/v1/info and /api/v1/player endpoints. Player returns key for decryption.
+    If API extraction fails, falls back to P2P family extractor.
+    Full extraction requires Playwright for SPA rendering.
+    """
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or 'upns.live'
+        base = f'https://{host}'
+
+        # Fragment is the video ID
+        video_id = parsed.fragment or url.split('#')[-1]
+        if not video_id:
+            # Try query param
+            if 'id=' in url:
+                video_id = parsed.query.split('id=')[-1].split('&')[0]
+        if not video_id:
+            return {'streams': []}
+
+        headers = {'User-Agent': UA, 'Referer': url, 'Origin': base, 'Accept': '*/*'}
+
+        # Try to get decryption key from player endpoint
+        decrypt_key = None
+        try:
+            r_player = requests.get(f'{base}/api/v1/player?t={video_id}', headers=headers, timeout=TIMEOUT)
+            if r_player.status_code == 200:
+                player_data = r_player.json()
+                if player_data.get('success') and player_data.get('k'):
+                    decrypt_key = player_data['k']
+        except: pass
+
+        # Try info endpoint with decryption
+        for ep in [f'/api/v1/info?id={video_id}', f'/api/v1/video?id={video_id}']:
+            try:
+                r = requests.get(f'{base}{ep}', headers=headers, timeout=TIMEOUT)
+                if r.status_code != 200:
+                    continue
+
+                # Try plain JSON
+                try:
+                    data = r.json()
+                    stream = _extract_video_from_json(data)
+                    if stream:
+                        return {'streams': [{'player': 'direct_m3u8', 'url': stream, 'name': 'UPNShare'}]}
+                except: pass
+
+                # Try AES-CBC decryption with key from player
+                if decrypt_key:
+                    try:
+                        dec = _decrypt_aes_cbc_with_key(r.text, decrypt_key)
+                        if dec:
+                            data = json.loads(dec)
+                            stream = _extract_video_from_json(data)
+                            if stream:
+                                return {'streams': [{'player': 'direct_m3u8', 'url': stream, 'name': 'UPNShare'}]}
+                    except: pass
+
+                # Fallback to default AES-CBC decryption
+                try:
+                    dec = _decrypt_aes_cbc(r.text, host)
+                    data = json.loads(dec)
+                    stream = _extract_video_from_json(data)
+                    if stream:
+                        return {'streams': [{'player': 'direct_m3u8', 'url': stream, 'name': 'UPNShare'}]}
+                except: pass
+            except: pass
+
+        # Fallback to P2P family extractor
+        return _extract_p2p_family(url)
+
+        # NOTE: UPNShare is a Vite+React SPA that renders everything via JS.
+        # Full extraction requires Playwright to intercept network requests.
+    except Exception as e:
+        print(f'[upnshare] error: {e}')
     return _extract_p2p_family(url)
 
 def extract_streamhg(url):
-    return _extract_p2p_family(url)
+    """StreamHG (hanerix.com) - VidHidePro extractor.
+
+    Flow:
+    1. Convert /e/ to /v/ for the embed page
+    2. Fetch the /v/ page
+    3. Find packed JS with eval(function(p,a,c,k,e,d){...})
+    4. Unpack to find sources with hls2, hls4, or file key containing m3u8 URLs
+    5. Join relative URLs with base URL
+    """
+    try:
+        parsed = urlparse(url)
+        base = f'{parsed.scheme}://{parsed.hostname}'
+
+        if '/e/' in url:
+            vid_url = url.replace('/e/', '/v/')
+        else:
+            vid_url = url
+
+        resp = requests.get(vid_url, headers={
+            'User-Agent': UA,
+            'Referer': url,
+            'Accept': 'text/html,application/xhtml+xml',
+        }, timeout=TIMEOUT)
+        html = resp.text
+
+        unpacked = _find_packed_js(html)
+
+        for key in ['hls2', 'hls4', 'hls', 'file', 'src', 'source']:
+            match = re.search(
+                rf'{key}\s*[=:]\s*["\']([^"\']+\.m3u8[^"\']*)["\']',
+                unpacked
+            )
+            if match:
+                stream_url = match.group(1)
+                if not stream_url.startswith('http'):
+                    stream_url = base + ('/' if not stream_url.startswith('/') else '') + stream_url
+                return {'streams': [{'player': 'direct_m3u8', 'url': stream_url, 'name': 'StreamHG'}]}
+
+        sources_match = re.search(r'sources\s*[=:]\s*\[(.+?)\]', unpacked, re.DOTALL)
+        if sources_match:
+            files = re.findall(r'(?:file|src|url)\s*[=:]\s*["\']([^"\']+)["\']', sources_match.group(1))
+            for f in files:
+                if '.m3u8' in f or 'hls' in f:
+                    if not f.startswith('http'):
+                        f = base + ('/' if not f.startswith('/') else '') + f
+                    return {'streams': [{'player': 'direct_m3u8', 'url': f, 'name': 'StreamHG'}]}
+
+        return _extract_p2p_family(url)
+    except Exception as e:
+        print(f'[streamhg] error: {e}')
+        return _extract_p2p_family(url)
 
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 # VIDSRC (XOR+RC4+B64 deobfuscation)
@@ -561,37 +943,180 @@ def extract_playmogo(url):
     return {'streams': []}
 
 def extract_abyss(url):
-    """Abyss Player - try extraction via iframe/resolve. Falls back to empty if encrypted."""
+    """Abyss Player - extract from Abyss embed pages.
+
+    The player uses base64-encoded const datas = "..." containing AES-CTR encrypted media.
+    Since decryption requires deriving a key from slug/md5_id/user_id fields, we try:
+    1. Direct m3u8 search in the page
+    2. Base64 config decode (check if media is a direct URL)
+    3. API endpoint /info/{slug}
+    Falls back to empty (needs Playwright for full extraction).
+    """
     try:
-        resp = requests.get(url, headers={'User-Agent': UA}, timeout=TIMEOUT)
+        parsed = urlparse(url)
+        host = f'{parsed.scheme}://{parsed.hostname}'
+
+        resp = requests.get(url, headers={'User-Agent': UA, 'Referer': url}, timeout=TIMEOUT)
         html = resp.text
-        # Try to find m3u8/mp4 in the page
-        m3u8 = re.search(r'(https?://[^\s\"\'<>]+\.m3u8[^\s\"\'<>]*)', html)
-        if m3u8: return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'Abyss'}]}
-        # Check for base64 encoded config
+
+        # 1. Try to find m3u8 directly in the page (some pages render it)
+        m3u8 = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
+        if m3u8:
+            return {'streams': [{'player': 'direct_m3u8', 'url': m3u8.group(1), 'name': 'Abyss'}]}
+
+        # 2. Check for base64 encoded config (const datas = "...")
         datas = re.search(r'const datas = "([^"]+)"', html)
         if datas:
             try:
                 config = json.loads(base64.b64decode(datas.group(1)))
-                # Check if media is already in the config
-                if isinstance(config.get('media'), str) and 'http' in config['media']:
-                    return {'streams': [{'player': 'direct_m3u8', 'url': config['media'], 'name': 'Abyss'}]}
+                slug = config.get('slug', '')
+                media = config.get('media', '')
+
+                # Check if media is already a direct URL (unencrypted)
+                if isinstance(media, str) and media.startswith('http'):
+                    return {'streams': [{'player': 'direct_m3u8', 'url': media, 'name': 'Abyss'}]}
+
+                # Try API with slug if available
+                if slug:
+                    for api_path in [f'/info/{slug}', f'/api/info/{slug}',
+                                     f'/api/video/{slug}', f'/api/{slug}']:
+                        try:
+                            api_resp = requests.get(f'{host}{api_path}', headers={
+                                'User-Agent': UA, 'Referer': url,
+                                'X-Requested-With': 'XMLHttpRequest',
+                            }, timeout=TIMEOUT)
+                            if api_resp.status_code == 200:
+                                try:
+                                    api_data = api_resp.json()
+                                    stream = _extract_video_from_json(api_data)
+                                    if stream:
+                                        return {'streams': [{'player': 'direct_m3u8', 'url': stream, 'name': 'Abyss'}]}
+                                except: pass
+                                # Check for m3u8 in response
+                                m3u8_in_api = re.search(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', api_resp.text)
+                                if m3u8_in_api:
+                                    return {'streams': [{'player': 'direct_m3u8', 'url': m3u8_in_api.group(1), 'name': 'Abyss'}]}
+                        except: pass
             except: pass
-        # Try iframe redirect
+
+        # 3. Try iframe redirect
         iframe = re.search(r'iframe[^>]*src=["\']([^"\']+)["\']', html)
         if iframe:
-            sub_player = classify_url(iframe.group(1))
-            sub_ex = EXTRACTORS.get(sub_player)
-            if sub_ex and sub_ex != extract_abyss:
-                try: return sub_ex(iframe.group(1))
+            iframe_url = iframe.group(1)
+            if iframe_url.startswith('//'):
+                iframe_url = 'https:' + iframe_url
+            player = classify_url(iframe_url)
+            extractor = EXTRACTORS.get(player)
+            if extractor and extractor != extract_abyss:
+                try:
+                    return extractor(iframe_url)
                 except: pass
-    except: pass
+
+        # NOTE: Abyss media is AES-CTR encrypted with key derived from slug/md5_id/user_id.
+        # Full extraction requires Playwright to intercept network requests or
+        # implementing the key derivation algorithm.
+    except Exception as e:
+        print(f'[abyss] error: {e}')
     return {'streams': []}
 
 
 def extract_flixcloud(url):
-    """FlixCloud - JWT token bound to browser IP. Needs Playwright to capture m3u8.
-    The resulting m3u8 URL is IP-bound, cannot be used from Stremio. Falls back to empty."""
+    """FlixCloud - JWT token bound to client IP. CryptoJS AES-encrypted m3u8 response.
+    Response keys: encrypted m3u8, AES key, IV, timestamp. Decrypts to m3u8 URL."""
+    try:
+        parsed = urlparse(url)
+        host = f'{parsed.scheme}://{parsed.hostname}'
+
+        # Extract video ID from URL path
+        vid_id = None
+        if '/e/' in url:
+            vid_id = url.split('/e/')[-1].split('?')[0].split('/')[0]
+        elif '/v/' in url:
+            vid_id = url.split('/v/')[-1].split('?')[0].split('/')[0]
+        elif '#' in url:
+            vid_id = url.split('#')[-1].split('?')[0]
+
+        if not vid_id:
+            # Try to extract from page first
+            resp = requests.get(url, headers={'User-Agent': UA}, timeout=TIMEOUT)
+            html = resp.text
+            iframe = re.search(r'iframe[^>]*src=["\']([^"\']*flixcloud[^"\']*)["\']', html)
+            if iframe:
+                iframe_url = iframe.group(1)
+                if not iframe_url.startswith('http'):
+                    iframe_url = 'https:' + iframe_url if iframe_url.startswith('//') else f'https://{iframe_url}'
+                vid_id = iframe_url.split('/')[-1].split('?')[0].split('#')[0]
+            else:
+                vid_id_match = re.search(r'video_id["\s:=]+["\']?(\w+)', html)
+                if vid_id_match:
+                    vid_id = vid_id_match.group(1)
+
+        if not vid_id:
+            return {'streams': []}
+
+        # Fetch the m3u8 API endpoint
+        api_resp = requests.get(
+            f'{host}/api/m3u8/{vid_id}',
+            headers={'User-Agent': UA, 'Referer': url},
+            timeout=TIMEOUT
+        )
+        if api_resp.status_code != 200:
+            return {'streams': []}
+
+        data = api_resp.json()
+
+        # Extract CryptoJS AES parameters from response
+        # Look for known key patterns: encrypted content, AES key, IV
+        enc_content = None
+        aes_key = None
+        aes_iv = None
+
+        for k, v in data.items():
+            if isinstance(v, str) and len(v) > 50 and not enc_content:
+                enc_content = v
+            elif isinstance(v, str) and len(v) == 16 and not aes_key:
+                aes_key = v
+            elif isinstance(v, str) and len(v) == 16 and not aes_iv:
+                aes_iv = v
+
+        if not enc_content or not aes_key or not aes_iv:
+            # Try named fields
+            enc_content = enc_content or data.get('05302bbb49') or data.get('encrypted')
+            aes_key = aes_key or data.get('cb1149d86d') or data.get('key')
+            aes_iv = aes_iv or data.get('37velhof3g8') or data.get('iv')
+
+        if not enc_content or not aes_key or not aes_iv:
+            return {'streams': []}
+
+        # CryptoJS AES decryption
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import unpad
+        import base64 as b64mod
+
+        encrypted = b64mod.b64decode(enc_content)
+        key = b64mod.b64decode(aes_key) if len(aes_key) > 16 else aes_key.encode('utf-8')
+        iv = b64mod.b64decode(aes_iv) if len(aes_iv) > 16 else aes_iv.encode('utf-8')
+
+        cipher = AES.new(key, AES.MODE_CBC, iv)
+        decrypted = unpad(cipher.decrypt(encrypted), AES.block_size)
+        result = decrypted.decode('utf-8')
+
+        # Parse the decrypted JSON for m3u8 URL
+        try:
+            result_data = json.loads(result)
+            m3u8_url = (result_data.get('hls') or result_data.get('url')
+                        or result_data.get('source') or result_data.get('m3u8'))
+            if isinstance(m3u8_url, dict):
+                m3u8_url = m3u8_url.get('url') or m3u8_url.get('src')
+            if m3u8_url:
+                return {'streams': [{'player': 'direct_m3u8', 'url': m3u8_url, 'name': 'FlixCloud'}]}
+        except json.JSONDecodeError:
+            # Maybe the result is a direct URL
+            if result.startswith('http') or result.startswith('/'):
+                return {'streams': [{'player': 'direct_m3u8', 'url': result, 'name': 'FlixCloud'}]}
+
+    except Exception as e:
+        print(f'[flixcloud] error: {e}')
     return {'streams': []}
 
 
@@ -814,14 +1339,25 @@ def extract_hsastream(url):
 # GENERIC EMBED — try to extract m3u8 from any embed page
 # ∎∎∎∎∎∎∎∎ ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
 def extract_generic_embed(url):
-    """Last resort: fetch embed page and look for m3u8/mp4 URLs"""
+    """Last resort: fetch embed page and look for m3u8/mp4 URLs.
+    Falls back to Playwright headless browser if no direct URLs found.
+    """
     try:
         resp = requests.get(url, headers={
             'User-Agent': UA,
             'Referer': url,
             'Accept': 'text/html,application/xhtml+xml',
         }, timeout=TIMEOUT)
-        html = resp.text
+
+        # If blocked by CF, try TRAWL
+        if resp.status_code == 403:
+            resp = _trawl_get(url)
+            if not resp:
+                # Skip to Playwright fallback below
+                raise Exception('CF blocked, skip to playwright')
+            html = resp
+        else:
+            html = resp.text
 
         m3u8s = re.findall(r'(https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*)', html)
         if m3u8s:
@@ -843,7 +1379,75 @@ def extract_generic_embed(url):
 
     except Exception as e:
         print(f'[generic_embed] error: {e}')
+
+    # ── Playwright fallback (LAST RESORT) ──────────────────────────────
+    # If we got an HTML page with no extractable URLs, try headless browser
+    # to intercept network requests for .m3u8 URLs.
+    try:
+        from playwright.sync_api import sync_playwright
+        print(f'[generic_embed] falling back to Playwright for {url}')
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=UA)
+            page = context.new_page()
+
+            m3u8_found = []
+
+            def on_response(response):
+                try:
+                    resp_url = response.url
+                    if '.m3u8' in resp_url:
+                        m3u8_found.append(resp_url)
+                except: pass
+
+            def on_request(request):
+                try:
+                    req_url = request.url
+                    if '.m3u8' in req_url:
+                        m3u8_found.append(req_url)
+                except: pass
+
+            page.on('response', on_response)
+            page.on('request', on_request)
+
+            try:
+                page.goto(url, timeout=30000, wait_until='networkidle')
+            except: pass
+
+            # Wait a bit for any lazy-loaded requests
+            try:
+                page.wait_for_timeout(5000)
+            except: pass
+
+            browser.close()
+
+            if m3u8_found:
+                print(f'[generic_playwright] found {len(m3u8_found)} m3u8 URL(s)')
+                return {'streams': [{'player': 'direct_m3u8', 'url': m3u8_found[0], 'name': 'Generic/Playwright'}]}
+
+    except ImportError:
+        print('[generic_embed] playwright not installed, skipping browser fallback')
+    except Exception as e:
+        print(f'[generic_playwright] error: {e}')
+
     return {'streams': []}
+
+
+def _trawl_get(url, timeout=30000):
+    """Fetch URL through TRAWL CF bypass"""
+    try:
+        trawl_url = os.getenv('TRAWL_URL', 'http://localhost:8191')
+        r = requests.post(f'{trawl_url}/v1', json={
+            'cmd': 'request.get', 'url': url, 'maxTimeout': timeout,
+        }, timeout=timeout/1000 + 15)
+        data = r.json()
+        if data.get('status') == 'ok':
+            sol = data.get('solution', {})
+            if sol.get('status') == 200:
+                return sol.get('response', '')
+        return None
+    except:
+        return None
 
 
 # ∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎∎
